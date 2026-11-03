@@ -191,9 +191,21 @@ $("#btnCheck").onclick = check;
 $("#btnHint").onclick = hint;
 $("#btnGrade").onclick = grade;
 boot();
-setInterval(() => {
+setInterval(async () => {
   const want = localStorage.getItem("lab");
   if (want && S.lab && want !== S.lab.id) openLab(want);
+  if (!S.lab) return;
+  try {
+    const st = await api(`/api/lab/${S.lab.id}/status`);
+    const tip = $("#tip");
+    if (st && st.total) {
+      tip.textContent = (st.up === st.total
+        ? `环境已就绪，${st.up}/${st.total} 台设备在线`
+        : `设备启动中 ${st.up}/${st.total}`) + " · 按 Ctrl+S 保存拓扑";
+    } else {
+      tip.textContent = "这个实验还没搭环境，去主界面点「一键搭建」";
+    }
+  } catch (e) { /* 服务没起就保持原样 */ }
 }, 5000);
 </script>
 </body>

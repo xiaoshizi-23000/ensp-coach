@@ -511,15 +511,30 @@ async function exportReport() {
 }
 
 async function doApply() {  const s = currentStep(); if (!s || S.busy) return;
-  if (!confirm("会直接把这一步的配置刷到设备上，覆盖同位置的现有配置。确定？")) return;
+  if (!confirm("让 AI 看着设备当前状态来配这一步（没配 Key 时按标准配置刷入）。确定？")) return;
   S.busy = true; $("#btnApply").disabled = true;
-  const r = await api(`/api/lab/${S.lab.id}/step/${s.id}/apply`, {});
+  const r = await api(`/api/lab/${S.lab.id}/step/${s.id}/apply`, { mode: "ai" });
   S.busy = false; $("#btnApply").disabled = false;
   if (r.error) return toast(r.error);
+  const box = $("#output");
+  box.classList.remove("hidden");
+  box.innerHTML = "";
+  box.appendChild(el("div", "why", r.ai ? "AI 根据设备当前状态生成了这些命令并已执行：" : "已按标准配置刷入："));
+  (r.report || []).forEach((x) => {
+    const row = el("div", "res " + (x.ok ? "pass" : "fail"));
+    row.appendChild(el("i", "ic", x.ok ? "✓" : "✗"));
+    const bd = el("div");
+    bd.appendChild(el("b", null, x.dev));
+    (x.cmds || []).slice(0, 12).forEach((c) => bd.appendChild(el("code", null, c)));
+    if (x.message) bd.appendChild(el("div", "why", x.message));
+    row.appendChild(bd);
+    box.appendChild(row);
+  });
+  if (r.diff) renderDiff(r.diff);
   const bad = (r.report || []).filter((x) => !x.ok);
-  if (bad.length) { toast(bad.map((b) => b.dev + "：" + b.message).join("；")); }
+  if (bad.length) toast(bad.map((b) => b.dev + "：" + b.message).join("；").slice(0, 120));
   else toast("已经刷进去了，正在检查");
-  setTimeout(doCheck, 1200);
+  setTimeout(doCheck, 1800);
 }
 
 function pushMsg(role, text) {

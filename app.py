@@ -470,6 +470,96 @@ def apply_step(lab, step):
     return {"ok": all(r["ok"] for r in report), "report": report}
 
 
+def ai_apply(lab, step):
+    st = read_json(state_path(lab["id"]), None)
+    if not st:
+        return {"ok": False, "error": "环境还没搭"}
+    plan = step.get("apply", {})
+    if not plan:
+        return {"ok": False, "error": "这一步没有可执行的配置"}
+    if not ai.ready():
+        r = apply_step(lab, step)
+        r["ai"] = False
+        return r
+
+    diff = diff_step(lab, step)
+    snap = {}
+    for dev in plan:
+        port = st["ports"].get(dev)
+        if port and probe(port, 0.3):
+            try:
+                _, text = console(port, ["display current-configuration"], 20)[0]
+                snap[dev] = text[:3500]
+            except Exception:
+                pass
+
+    prompt = f"""你是华为 VRP 设备的配置执行器。目标：让每台设备达到这一步要求的状态。
+
+【这一步的标准配置】
+{json.dumps(plan, ensure_ascii=False, indent=1)}
+
+【程序比对出的差异（可信）】
+{json.dumps([{k: v for k, v in r.items() if k in ("dev", "missing", "extra")} for r in diff.get("reports", []) if r.get("ok")], ensure_ascii=False, indent=1)}
+
+【设备当前真实配置】
+""" + "\n\n".join(f"--- {k} ---\n{v}" for k, v in snap.items()) + """
+
+请输出 JSON：{"设备名": ["命令1", "命令2", ...]}
+要求：
+- 是把设备从当前状态推进到目标的最小命令序列，包含 system-view / quit 这类视图切换。
+- 设备已经满足的配置不要再发一遍。
+- 只允许配置类命令，禁止擦除配置、重启设备。
+- 只输出 JSON，不要解释。"""
+
+    r = ai.chat([{"role": "user", "content": prompt}],
+                system="你是华为 VRP 配置执行器，只输出 JSON。", json_mode=True,
+                temperature=0.2, timeout=180, max_tokens=4096)
+    ai_plan = None
+    if r.get("ok") and (r.get("content") or "").strip():
+        try:
+            txt = r["content"].strip()
+            i, j = txt.find("{"), txt.rfind("}")
+            cand = json.loads(txt[i:j + 1], strict=False)
+            if isinstance(cand, dict) and cand:
+                ai_plan = {d: [str(x) for x in v] for d, v in cand.items()
+                           if isinstance(v, list) and d in plan and len(v) < 80}
+        except Exception:
+            ai_plan = None
+    if not ai_plan:
+        r2 = apply_step(lab, step)
+        r2["ai"] = False
+        r2["note"] = "AI 没给出可用方案，已按标准配置执行"
+        return r2
+
+    report = []
+    for dev, cmds in ai_plan.items():
+        port = st["ports"].get(dev)
+        if not port or not probe(port, 0.3):
+            report.append({"dev": dev, "ok": False, "message": "设备没起来", "cmds": cmds})
+            continue
+        try:
+            c = Vrp("127.0.0.1", port, timeout=25)
+            c.open()
+            c.cmd("return", 6)
+            c.cmd("screen-length 0 temporary", 6)
+            bad = []
+            for line in cmds:
+                out = c.cmd(str(line).strip(), 30)
+                for ln in out.splitlines():
+                    if re.search(r"Error:|Unrecognized command|Incomplete command|Wrong parameter", ln):
+                        bad.append(f"{line} → {ln.strip()}")
+            c.close()
+            report.append({"dev": dev, "ok": not bad, "message": "" if not bad else "；".join(bad),
+                           "cmds": cmds})
+        except Exception as e:
+            report.append({"dev": dev, "ok": False, "message": str(e), "cmds": cmds})
+
+    time.sleep(1)
+    d2 = diff_step(lab, step)
+    return {"ok": all(r["ok"] for r in report), "ai": True, "report": report, "diff": d2,
+            "plan": ai_plan}
+
+
 JOBS = {}
 
 
@@ -1620,7 +1710,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": True, "answer": step.get("apply", {})})
                 if parts[5] == "apply":
                     bump(lab["id"], step["id"], "apply")
-                    return self.send_json(apply_step(lab, step))
+                    if (data.get("mode") or "") == "ai":
+                        return self.send_json(ai_apply(lab, step))
+                    r = apply_step(lab, step)
+                    r["ai"] = False
+                    return self.send_json(r)
         return self.send_json({"ok": False, "error": "no route"}, 404)
 
     def handle_chat(self, data):
