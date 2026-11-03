@@ -1745,6 +1745,27 @@ class Handler(BaseHTTPRequestHandler):
             if step:
                 ctx.append(f"当前步骤 {step['id']}：{step['title']}")
                 ctx.append(f"这一步要做的：{step['brief']}")
+                if step.get("why"):
+                    ctx.append("为什么这么做：" + step["why"])
+                if step.get("apply"):
+                    ctx.append("这一步的标准配置（做完后应该达成的命令）：\n" +
+                               json.dumps(step["apply"], ensure_ascii=False))
+                h3 = (step.get("hints") or [None, None, None])[2]
+                if h3:
+                    ctx.append("第三级提示里的完整命令：\n" + str(h3)[:800])
+            st = read_json(state_path(lab["id"]), None)
+            if st and st.get("devices"):
+                snap = []
+                for d in st["devices"]:
+                    if not d.get("port") or not probe(d["port"], 0.3):
+                        continue
+                    try:
+                        _, text = console(d["port"], ["display current-configuration"], 15)[0]
+                        snap.append(f"--- {d['name']} 当前配置 ---\n" + text[:2200])
+                    except Exception:
+                        pass
+                if snap:
+                    ctx.append("他设备的当前真实配置：\n" + "\n".join(snap))
         if data.get("last_output"):
             ctx.append("他刚才跑检查命令拿到的回显：\n" + str(data["last_output"])[:1500])
         msgs = [{"role": "user", "content": "【当前进度】\n" + "\n".join(ctx)}]
@@ -1753,7 +1774,7 @@ class Handler(BaseHTTPRequestHandler):
                 msgs.append({"role": h["role"], "content": str(h["content"])[:2000]})
         q = str(data.get("question") or "").strip()
         msgs.append({"role": "user", "content": q or "我卡在这一步了，帮我看看从哪下手。"})
-        return self.send_json(ai.chat(msgs))
+        return self.send_json(ai.chat(msgs, timeout=120))
 
     def static(self, path):
         if path in ("/", ""):
