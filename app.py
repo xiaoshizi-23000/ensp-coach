@@ -127,13 +127,17 @@ def grade(lab):
     rows = []
     total = 0.0
     for s in steps:
+        sp = prog.get("spent", {}).get(s["id"], {})
         r = run_checks(lab, s, record=False, source="grade")
-        pen = penalty_of(prog.get("spent", {}).get(s["id"], {}))
+        pen = penalty_of(sp)
         sc = round(per * (1 - pen), 1) if r["ok"] else 0.0
         total += sc
+        reason = ("AI 代做" if sp.get("apply") else
+                  "看了答案" if sp.get("answer") else
+                  f"提示用了 {sp.get('hint', 0)} 级" if sp.get("hint") else "")
         rows.append({
             "id": s["id"], "title": s["title"], "full": round(per, 1), "score": sc,
-            "pass": r["ok"], "penalty": round(pen * 100),
+            "pass": r["ok"], "penalty": round(pen * 100), "penalty_reason": reason,
             "fails": [f"{x['dev']} {x['cmd']}" for x in r["results"] if not x["pass"]],
         })
     total = round(total, 1)
@@ -1644,6 +1648,13 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             choice = (qs.get("choice") or [str(data.get("choice", ""))])[0]
             return self.send_json(quiz_answer(m.group(1), choice))
+
+        m = re.fullmatch(r"/api/lab/([^/]+)/reset-spent", path)
+        if m:
+            p2 = read_json(progress_path(m.group(1)), {"done": [], "spent": {}})
+            p2["spent"] = {}
+            write_json(progress_path(m.group(1)), p2)
+            return self.send_json({"ok": True})
 
         if path == "/api/exam":
             ids = [i for i in (data.get("lab_ids") or []) if get_lab(i)]

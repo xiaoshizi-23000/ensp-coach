@@ -511,7 +511,7 @@ async function exportReport() {
 }
 
 async function doApply() {  const s = currentStep(); if (!s || S.busy) return;
-  if (!confirm("让 AI 看着设备当前状态来配这一步（没配 Key 时按标准配置刷入）。确定？")) return;
+  if (!confirm("让 AI 看着设备当前状态来配这一步（没配 Key 时按标准配置刷入）。\n注意：用了代做，这一步交卷将计 0 分。确定？")) return;
   S.busy = true; $("#btnApply").disabled = true;
   const r = await api(`/api/lab/${S.lab.id}/step/${s.id}/apply`, { mode: "ai" });
   S.busy = false; $("#btnApply").disabled = false;
@@ -787,7 +787,7 @@ function showGrade(r) {
     const d = el("div", "g-row");
     d.appendChild(el("div", "idx", String(i + 1)));
     const t = el("div", "t");
-    t.appendChild(document.createTextNode(row.title + (row.penalty ? `（提示/答案扣 ${row.penalty}%）` : "")));
+    t.appendChild(document.createTextNode(row.title + (row.penalty ? `（${row.penalty_reason || "辅助"}，扣 ${row.penalty}%）` : "")));
     (row.fails || []).forEach((f) => t.appendChild(el("small", null, "没过：" + f)));
     d.appendChild(t);
     d.appendChild(el("div", "s" + (row.score ? "" : " zero"), row.score + " / " + row.full));
@@ -802,6 +802,14 @@ function showGrade(r) {
   const exp = el("button", "btn ghost", "导出成绩单");
   exp.onclick = () => exportGrade(r);
   acts.appendChild(exp);
+  const retry = el("button", "btn ghost", "清除扣分记录重测");
+  retry.onclick = async () => {
+    if (!confirm("清掉这个实验的提示/答案/代做记录，然后重新交卷按干净记录算分？")) return;
+    await api(`/api/lab/${S.lab.id}/reset-spent`, {});
+    $("#gradeModal").classList.add("hidden");
+    doGrade();
+  };
+  acts.appendChild(retry);
   const course = el("button", "btn", "看考证路线进度");
   course.onclick = () => { window.open("/course", "ensp-course"); };
   acts.appendChild(course);
