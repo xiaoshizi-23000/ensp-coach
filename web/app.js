@@ -774,7 +774,7 @@ async function doGrade() {
 
 function showGrade(r) {
   $("#gradeTitle").textContent = S.lab.title + " · 成绩单";
-  $("#gradeSub").textContent = new Date(r.at * 1000).toLocaleString("zh-CN") + " 判分";
+  $("#gradeSub").textContent = new Date(r.at * 1000).toLocaleString("zh-CN") + " 判分 · 用时 " + (elapsed() || "-") + " · 已记入历史和考证路线进度";
   const body = $("#gradeBody");
   body.innerHTML = "";
   const head = el("div", "g-score");
@@ -788,7 +788,7 @@ function showGrade(r) {
     d.appendChild(el("div", "idx", String(i + 1)));
     const t = el("div", "t");
     t.appendChild(document.createTextNode(row.title + (row.penalty ? `（提示/答案扣 ${row.penalty}%）` : "")));
-    if (!row.pass) t.appendChild(el("small", null, "没过：" + (row.fails || []).join("；")));
+    (row.fails || []).forEach((f) => t.appendChild(el("small", null, "没过：" + f)));
     d.appendChild(t);
     d.appendChild(el("div", "s" + (row.score ? "" : " zero"), row.score + " / " + row.full));
     body.appendChild(d);
@@ -799,6 +799,12 @@ function showGrade(r) {
   const back = el("button", "btn ghost", "回去接着做");
   back.onclick = () => $("#gradeModal").classList.add("hidden");
   acts.appendChild(back);
+  const exp = el("button", "btn ghost", "导出成绩单");
+  exp.onclick = () => exportGrade(r);
+  acts.appendChild(exp);
+  const course = el("button", "btn", "看考证路线进度");
+  course.onclick = () => { window.open("/course", "ensp-course"); };
+  acts.appendChild(course);
   const nextItem = ((S.exam && S.exam.items) || []).find((i) => i.score == null && i.id !== S.lab.id);
   if (nextItem) {
     const next = el("button", "btn primary", "下一题：" + nextItem.title);
@@ -809,6 +815,26 @@ function showGrade(r) {
     acts.appendChild(next);
   }
   $("#gradeModal").classList.remove("hidden");
+}
+
+function exportGrade(r) {
+  const L = ["网络实验陪练 · 成绩单", "",
+    "实验：" + S.lab.title,
+    "得分：" + r.score + "/100（" + r.grade + "）",
+    "判分时间：" + new Date(r.at * 1000).toLocaleString("zh-CN"),
+    "用时：" + (elapsed() || "-"), "",
+    "| # | 步骤 | 得分 | 满分 | 扣分 | 结果 |",
+    "|---|---|---|---|---|---|"];
+  r.rows.forEach((row, i) => {
+    L.push(`| ${i + 1} | ${row.title} | ${row.score} | ${row.full} | ${row.penalty}% | ${row.pass ? "过" : "没过"} |`);
+    (row.fails || []).forEach((f) => L.push("| | └ " + f + " | | | | |"));
+  });
+  const blob = new Blob([L.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "成绩单-" + S.lab.id + ".md";
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 let kbCat = "";

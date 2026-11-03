@@ -183,6 +183,7 @@ async function grade() {
   box.innerHTML = "";
   if (!r.ok) { box.appendChild(el("div", "res", r.error || "判分失败")); return; }
   box.appendChild(el("div", "res", `得分 ${r.score} / 100 · ${r.grade}`));
+  box.appendChild(el("div", "res", "已记入复盘历史和考证路线进度，成绩单在主界面"));
   r.rows.forEach((x, i) => box.appendChild(el("div", "res " + (x.pass ? "pass" : "fail"),
     `${i + 1}. ${x.title}  ${x.score}/${x.full}`)));
 }
