@@ -1,0 +1,394 @@
+{
+  "title": "IBGP 路由反射器实验",
+  "subtitle": "三台路由器先全互联 IBGP，再改 R2 为 RR 验证反射",
+  "level": "进阶",
+  "minutes": 25,
+  "tags": [
+    "BGP",
+    "路由反射器",
+    "IBGP"
+  ],
+  "intro": "三台 AR2220 跑 IBGP，先做全互联邻居，再在 R2 上配置路由反射器，验证 R1 和 R3 的客户端路由能被反射。",
+  "devices": [
+    {
+      "name": "R1",
+      "model": "AR2220",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "R2",
+      "model": "AR2220",
+      "x": 500,
+      "y": 220
+    },
+    {
+      "name": "R3",
+      "model": "AR2220",
+      "x": 800,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "R1",
+      "aPort": "GE0/0/0",
+      "b": "R2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "R2",
+      "aPort": "GE0/0/1",
+      "b": "R3",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "配置基础接口地址",
+      "brief": "R1 的 GE0/0/0 配 10.1.12.1/24，R2 的 GE0/0/0 配 10.1.12.2/24，R2 的 GE0/0/1 配 10.1.23.2/24，R3 的 GE0/0/0 配 10.1.23.3/24。",
+      "why": "IBGP 邻居通常用直连地址建立，先把互联接口地址配好，后面才能起邻居。",
+      "hints": [
+        "先 system-view 进系统视图，再进接口视图配地址。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.1.12.1 24 配地址。",
+        "R1：\nsystem-view\ninterface GigabitEthernet0/0/0\nip address 10.1.12.1 24\nquit\nreturn\n\nR2：\nsystem-view\ninterface GigabitEthernet0/0/0\nip address 10.1.12.2 24\nquit\ninterface GigabitEthernet0/0/1\nip address 10.1.23.2 24\nquit\nreturn\n\nR3：\nsystem-view\ninterface GigabitEthernet0/0/0\nip address 10.1.23.3 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display ip interface brief",
+          "expect": "10.1.12.1"
+        },
+        {
+          "dev": "R2",
+          "cmd": "display ip interface brief",
+          "expect": "10.1.12.2"
+        },
+        {
+          "dev": "R2",
+          "cmd": "display ip interface brief",
+          "expect": "10.1.23.2"
+        },
+        {
+          "dev": "R3",
+          "cmd": "display ip interface brief",
+          "expect": "10.1.23.3"
+        }
+      ],
+      "apply": {
+        "R1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.1.12.1 24",
+          "quit",
+          "return"
+        ],
+        "R2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.1.12.2 24",
+          "quit",
+          "interface GigabitEthernet0/0/1",
+          "ip address 10.1.23.2 24",
+          "quit",
+          "return"
+        ],
+        "R3": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.1.23.3 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "验证直连互通",
+      "brief": "从 R1 ping 10.1.12.2，从 R3 ping 10.1.23.2，四包全通。",
+      "why": "直连不需要路由，配好地址就应该通，不通说明接口地址配错了。",
+      "hints": [
+        "直接 ping 对端地址，-c 指定次数。",
+        "ping -c 4 10.1.12.2",
+        "R1：ping -c 4 10.1.12.2\nR3：ping -c 4 10.1.23.2"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "ping -c 4 10.1.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "R3",
+          "cmd": "ping -c 4 10.1.23.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "R1": [
+          "ping -c 4 10.1.12.2"
+        ],
+        "R3": [
+          "ping -c 4 10.1.23.2"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配置 R1 的 IBGP 邻居",
+      "brief": "R1 上启动 BGP 100，与 R2（10.1.12.2）和 R3（10.1.23.3）建立 IBGP 邻居。",
+      "why": "全互联阶段需要每台路由器与所有其他 IBGP 路由器建立邻居，R1 需要同时指向 R2 和 R3。",
+      "hints": [
+        "先 bgp 100 进 BGP 视图，再用 peer 命令指定邻居地址和 AS 号。",
+        "bgp 100\npeer 10.1.12.2 as-number 100\npeer 10.1.23.3 as-number 100",
+        "system-view\nbgp 100\npeer 10.1.12.2 as-number 100\npeer 10.1.23.3 as-number 100\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display bgp peer",
+          "expect": "10.1.12.2"
+        },
+        {
+          "dev": "R1",
+          "cmd": "display bgp peer",
+          "expect": "10.1.23.3"
+        }
+      ],
+      "apply": {
+        "R1": [
+          "system-view",
+          "bgp 100",
+          "peer 10.1.12.2 as-number 100",
+          "peer 10.1.23.3 as-number 100",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配置 R2 的 IBGP 邻居",
+      "brief": "R2 上启动 BGP 100，与 R1（10.1.12.1）和 R3（10.1.23.3）建立 IBGP 邻居。",
+      "why": "全互联要求 R2 也与 R1、R3 分别建邻居，这样 R1 和 R3 之间的路由才能通过 R2 中转。",
+      "hints": [
+        "同样用 bgp 100 进 BGP 视图，peer 指定两个邻居。",
+        "bgp 100\npeer 10.1.12.1 as-number 100\npeer 10.1.23.3 as-number 100",
+        "system-view\nbgp 100\npeer 10.1.12.1 as-number 100\npeer 10.1.23.3 as-number 100\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R2",
+          "cmd": "display bgp peer",
+          "expect": "10.1.12.1"
+        },
+        {
+          "dev": "R2",
+          "cmd": "display bgp peer",
+          "expect": "10.1.23.3"
+        }
+      ],
+      "apply": {
+        "R2": [
+          "system-view",
+          "bgp 100",
+          "peer 10.1.12.1 as-number 100",
+          "peer 10.1.23.3 as-number 100",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "配置 R3 的 IBGP 邻居",
+      "brief": "R3 上启动 BGP 100，与 R1（10.1.12.1）和 R2（10.1.23.2）建立 IBGP 邻居。",
+      "why": "R3 也要与 R1、R2 建邻居，全互联三角关系才完整。",
+      "hints": [
+        "bgp 100 进 BGP 视图，peer 指定两个邻居。",
+        "bgp 100\npeer 10.1.12.1 as-number 100\npeer 10.1.23.2 as-number 100",
+        "system-view\nbgp 100\npeer 10.1.12.1 as-number 100\npeer 10.1.23.2 as-number 100\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R3",
+          "cmd": "display bgp peer",
+          "expect": "10.1.12.1"
+        },
+        {
+          "dev": "R3",
+          "cmd": "display bgp peer",
+          "expect": "10.1.23.2"
+        }
+      ],
+      "apply": {
+        "R3": [
+          "system-view",
+          "bgp 100",
+          "peer 10.1.12.1 as-number 100",
+          "peer 10.1.23.2 as-number 100",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "验证全互联 IBGP 邻居状态",
+      "brief": "在三台路由器上查看 BGP 邻居，所有邻居状态应为 Established。",
+      "why": "邻居建立成功是后续传递路由的前提，状态不是 Established 说明地址或 AS 号配错了。",
+      "hints": [
+        "用 display bgp peer 查看邻居状态，关注 State 列。",
+        "display bgp peer",
+        "R1：display bgp peer\nR2：display bgp peer\nR3：display bgp peer"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display bgp peer",
+          "expect": "Established"
+        },
+        {
+          "dev": "R2",
+          "cmd": "display bgp peer",
+          "expect": "Established"
+        },
+        {
+          "dev": "R3",
+          "cmd": "display bgp peer",
+          "expect": "Established"
+        }
+      ],
+      "apply": {
+        "R1": [
+          "display bgp peer"
+        ],
+        "R2": [
+          "display bgp peer"
+        ],
+        "R3": [
+          "display bgp peer"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "在 R1 上发布测试网段",
+      "brief": "R1 上创建 LoopBack0 接口 1.1.1.1/32，并在 BGP 中 network 发布该网段。",
+      "why": "需要一个路由条目来验证反射，用 LoopBack 地址最干净，不影响物理接口。",
+      "hints": [
+        "先创建 LoopBack0 配地址，再进 BGP 用 network 命令发布。",
+        "interface LoopBack0\nip address 1.1.1.1 32\nquit\nbgp 100\nnetwork 1.1.1.1 32",
+        "system-view\ninterface LoopBack0\nip address 1.1.1.1 32\nquit\nbgp 100\nnetwork 1.1.1.1 32\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display bgp routing-table",
+          "expect": "1.1.1.1/32"
+        }
+      ],
+      "apply": {
+        "R1": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 1.1.1.1 32",
+          "quit",
+          "bgp 100",
+          "network 1.1.1.1 32",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "验证 R3 收到路由",
+      "brief": "在 R3 上查看 BGP 路由表，应能看到 1.1.1.1/32 且下一跳为 10.1.12.1。",
+      "why": "全互联时 R1 的路由会直接通过 IBGP 传给 R3，验证全互联工作正常。",
+      "hints": [
+        "用 display bgp routing-table 查看 BGP 路由。",
+        "display bgp routing-table",
+        "display bgp routing-table"
+      ],
+      "check": [
+        {
+          "dev": "R3",
+          "cmd": "display bgp routing-table",
+          "expect": "1.1.1.1/32"
+        }
+      ],
+      "apply": {
+        "R3": [
+          "display bgp routing-table"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "在 R2 上配置路由反射器",
+      "brief": "R2 上进入 BGP 100，将 R1 和 R3 配置为反射客户端。",
+      "why": "路由反射器允许从客户端学到的路由反射给其他客户端，从而打破 IBGP 水平分割，减少全互联邻居数量。",
+      "hints": [
+        "在 BGP 视图下用 peer 命令指定 reflect-client。",
+        "bgp 100\npeer 10.1.12.1 reflect-client\npeer 10.1.23.3 reflect-client",
+        "system-view\nbgp 100\npeer 10.1.12.1 reflect-client\npeer 10.1.23.3 reflect-client\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "R2",
+          "cmd": "display bgp peer",
+          "expect": "Reflect-Client"
+        }
+      ],
+      "apply": {
+        "R2": [
+          "system-view",
+          "bgp 100",
+          "peer 10.1.12.1 reflect-client",
+          "peer 10.1.23.3 reflect-client",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "验证客户端路由被反射",
+      "brief": "在 R3 上查看 BGP 路由表，1.1.1.1/32 应仍然存在且下一跳不变；在 R1 上查看 3.3.3.3/32 也应存在。",
+      "why": "RR 配置后，R1 和 R3 之间的路由不再需要直连 IBGP 邻居，而是由 R2 反射，验证反射功能生效。",
+      "hints": [
+        "在 R3 和 R1 上分别查看 BGP 路由表，确认对端 LoopBack 路由存在。",
+        "display bgp routing-table",
+        "R3：display bgp routing-table\nR1：display bgp routing-table"
+      ],
+      "check": [
+        {
+          "dev": "R3",
+          "cmd": "display bgp routing-table",
+          "expect": "1.1.1.1/32"
+        },
+        {
+          "dev": "R1",
+          "cmd": "display bgp routing-table",
+          "expect": "3.3.3.3/32"
+        }
+      ],
+      "apply": {
+        "R3": [
+          "display bgp routing-table"
+        ],
+        "R1": [
+          "display bgp routing-table"
+        ]
+      }
+    }
+  ],
+  "id": "bgp-rr",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "三台路由器跑 IBGP，先全互联再改成 R2 做路由反射器，验证客户端路由被反射"
+}

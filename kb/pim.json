@@ -1,0 +1,55 @@
+{
+  "id": "pim",
+  "title": "PIM-DM 与 PIM-SM 组播路由",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "PIM-DM",
+    "PIM-SM",
+    "组播路由",
+    "RPF",
+    "SPT",
+    "RPT",
+    "RP",
+    "BSR",
+    "IGMP",
+    "(*,G)",
+    "(S,G)"
+  ],
+  "one": "两种组播路由协议：DM 推模式泛洪剪枝，SM 拉模式按需建树",
+  "analogy": "PIM-DM 像村里发通知：不管谁要，先把消息挨家挨户送一遍，没人要的支路再剪掉，简单但费劲。PIM-SM 像快递驿站：先问一句谁要，要的人到驿站登记，快递只送到登记过的地址，平时不打扰别人。所以人少又分散时用 SM 省带宽，人密集又都在看同一路节目时 DM 反而干脆。",
+  "body": "## 为什么需要 PIM\n\n组播数据的目的地址是 D 类（224.0.0.0/4），不是单播地址，路由器不能靠单播路由表转发。IGMP 只解决\"最后一跳主机要不要\"的问题，跨网段怎么把流量送到接收者所在的网段，靠的是组播路由协议。PIM（Protocol Independent Multicast）是其中事实标准，\"Protocol Independent\" 指它不自己算单播路由，而是直接借用现成的单播路由表（IGP/BGP 都行）来做 RPF 检查。\n\nPIM 有两个必须记住的底层概念：\n\n- **RPF 检查**：收到组播报文时，看源地址在单播路由表里的出接口是不是报文的入接口。是则通过，否则丢弃。这是组播防环的核心，所有 PIM 模式都依赖它。\n- **RPF 邻居**：指向组播源（或 RP）的单播下一跳。PIM 只在 RPF 接口上向上游发 Join/Prune，形成一棵无环的转发树。\n\n组播分发树有两种：**SPT**（Shortest Path Tree，源树，用 (S,G) 标识，路径最短但每源一棵树）和 **RPT**（Rendezvous Point Tree，共享树，用 (*,G) 标识，所有源共用一棵树，路径可能非最优但状态少）。PIM-DM 只用 SPT，PIM-SM 先 RPT 后按需切 SPT。\n\n## PIM-DM：推模式\n\n### 工作机制\n\nPIM-DM 假设\"网内到处都有接收者\"，所以先把流量推到全网，再剪掉不要的分支。四个阶段：\n\n1. **邻居发现**：周期性发 Hello（默认 30s，holdtime 105s），选举 DR（共享网段上），建立邻居。\n2. **泛洪（Flooding）**：收到组播报文，做 RPF 检查通过后，从除入接口外的所有 PIM 接口转发出去。\n3. **剪枝（Prune）**：下游没有接收者（没有 IGMP 成员、也没有下游 PIM 邻居要）的接口回 Prune 消息，上游把该接口从出接口列表删掉，并启动剪枝定时器（默认 210s）。\n4. **状态刷新（State Refresh）**：剪枝定时器到期前，上游周期性发 State Refresh 报文，下游据此刷新剪枝状态，避免剪掉后又泛洪。\n\n另外还有**断言（Assert）**机制：多台路由器接到同一共享网段、都往该网段转发同一组播流时，通过 Assert 报文比较到源的单播路由优先级和度量，胜者继续转发，败者剪掉接口，避免重复报文。\n\n### 特点与取舍\n\n- 配置极简，不需要 RP，适合接收者密集、流量持续的场景（如园区视频、监控）。\n- 周期性泛洪-剪枝带来额外开销，接收者稀疏时浪费严重。\n- 剪枝状态需要靠 State Refresh 维持，规模大时状态刷新报文本身也是负担。\n- 华为设备上 PIM-DM 是全局使能后按接口使能，注意接口下 `pim dm` 与全局 `pim` 的关系。\n\n## PIM-SM：拉模式\n\n### 核心角色\n\n- **RP（Rendezvous Point）**：共享树的根，所有源和接收者先向 RP 汇聚。\n- **DR（Designated Router）**：共享网段上选举，负责代表该网段向 RP 发 Join、向 RP 注册源。\n- **BSR（Bootstrap Router）**：动态收集 RP 信息并泛洪给全网。\n- **C-RP / C-BSR**：候选 RP / 候选 BSR，通过竞选产生。\n\nRP 的发现方式有静态 RP、BSR 动态、Anycast-RP（MSDP 或 PIM Anycast-RP）等。\n\n### 共享树建立（RPT）\n\n1. 接收者所在网段的 DR 收到 IGMP Report 后，向 RP 发 `Join (*, G)`，逐跳建立 (*,G) 表项，形成 RPT。\n2. 源侧 DR 收到组播报文，做 RPF 检查后，把报文**封装在 Register 单播报文**里发给 RP（因为此时 RP 还没有 (S,G) 表项，直接发组播会被丢弃）。\n3. RP 解封装后沿 RPT 下发。同时 RP 向源方向发 `Join (S, G)`，建立 SPT 到源。\n4. SPT 建好后，RP 向源侧 DR 发 **Register-Stop**，源侧 DR 停止封装，改为直接发组播。\n\n### SPT 切换\n\n接收者侧 DR 发现从 RP 来的流量速率超过阈值（默认 `spt-switch-threshold` 为 0，即立即切换），就向源发 `Join (S, G)`，建立源到接收者的 SPT，然后向上游发 `Prune (S, G, RP-bit)` 剪掉 RPT 分支。切换后路径更短，但路由器上要维护 (S,G) 状态，规模大时状态多。\n\n### 剪枝与超时\n\n- `Join/Prune` 报文周期性发送（默认 60s），携带 holdtime（默认 210s），超时未刷新则删除表项。\n- 下游全部剪掉后，上游等一段时间（默认 210s）才真正删除 (S,G)，避免抖动。\n\n### 报文格式要点\n\nPIM 报文封装在 IP 之上，协议号 103，目的地址常用 224.0.0.13（All-PIM-Routers）。报文类型包括 Hello(0)、Register(1)、Register-Stop(2)、Join/Prune(3)、Bootstrap(4)、Assert(5)、Graft(6)、Graft-Ack(7)、State-Refresh(9)。Join/Prune 报文中用编码的地址列表表示 (S,G) 或 (*,G)，带 P 位（Prune）和 WC 位（Wildcard，表示 (*,G)）。\n\n## 两者对比\n\n| 维度 | PIM-DM | PIM-SM |\n|---|---|---|\n| 模型 | 推（先泛洪后剪枝） | 拉（先 Join 后转发） |\n| 是否需要 RP | 否 | 是 |\n| 树类型 | 仅 SPT | RPT + SPT |\n| 适用场景 | 接收者密集、流量持续 | 接收者稀疏、源多 |\n| 状态开销 | 泛洪开销大 | RP 是瓶颈与单点 |\n| 配置复杂度 | 低 | 高 |\n\n## 与相邻技术的分工\n\n- **IGMP/IGMP Snooping**：负责主机与最后一跳路由器、二层交换机之间的成员管理，PIM 负责路由器之间。\n- **MSDP**：跨 PIM-SM 域共享源信息，解决 RP 之间不知道对方域内源的问题。\n- **PIM-SSM**：指定源组播，直接用 (S,G) Join，不需要 RP，适合已知源的场景（如 IPTV）。\n- **MBGP/MVPN**：跨 AS 或 VPN 内传递组播路由，PIM 在其上建树。\n\n## 设计取舍\n\nPIM-SM 用 RP 换来了稀疏场景下的带宽效率，代价是 RP 成为单点与流量汇聚点，且存在 RPT 到 SPT 的切换开销；PIM-DM 用泛洪换来了无 RP 的简单性，代价是稀疏场景浪费。工程上园区监控多用 DM 或 SSM，运营商 IPTV 多用 SM/SSM，跨域用 MSDP + MBGP。",
+  "cmds": [
+    "display pim neighbor",
+    "display pim routing-table",
+    "display pim interface verbose",
+    "display pim bsr-info",
+    "display pim rp-info"
+  ],
+  "pits": [
+    "RPF 检查失败是组播不通的头号原因，先查单播路由回源接口",
+    "共享网段多台路由器要确认 DR 选举结果，DR 不对 Join 发不出去",
+    "PIM-SM 要确认 RP 可达且各路由器 RP 信息一致",
+    "剪枝定时器与 Join 周期不匹配会导致流量抖动",
+    "二层要配 IGMP Snooping，否则组播在 VLAN 内泛洪"
+  ],
+  "qa": [
+    {
+      "q": "PIM-DM 和 PIM-SM 的核心区别是什么？",
+      "a": "DM 是推模式，先泛洪再剪枝，不需要 RP，只用 SPT；SM 是拉模式，接收者先向 RP 发 Join 建 RPT，再按需切 SPT，需要 RP。DM 适合密集场景，SM 适合稀疏场景。"
+    },
+    {
+      "q": "PIM-SM 中 Register 报文的作用是什么？",
+      "a": "源侧 DR 把组播报文封装成 Register 单播发给 RP，让 RP 学习到源并建立 SPT；SPT 建好后 RP 回 Register-Stop，源侧 DR 停止封装。"
+    },
+    {
+      "q": "什么是 RPF 检查？失败会怎样？",
+      "a": "收到组播报文时检查源地址的单播路由出接口是否为报文入接口，不是则丢弃，用于防环。失败时流量被丢，需检查单播路由和 RPF 邻居。"
+    },
+    {
+      "q": "SPT 切换的触发条件是什么？",
+      "a": "接收者侧 DR 发现从 RP 收到的流量速率超过 spt-switch-threshold（默认 0 即立即切换），向源发 Join (S,G) 建 SPT，再发 Prune 剪掉 RPT 分支。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 组播技术"
+}

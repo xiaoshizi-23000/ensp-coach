@@ -1,0 +1,383 @@
+{
+  "title": "eBGP 邻居建立",
+  "subtitle": "两台路由器跨 AS 建立 eBGP 并通告网段",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "BGP",
+    "eBGP",
+    "路由协议"
+  ],
+  "intro": "两台 AR1220 直连，分别属于 AS 65001 和 AS 65002，配置 eBGP 邻居并互相通告自己的 Loopback 网段。最终在 AR1 上看到邻居状态 Established，且 BGP 路由表里有对端通告的网段。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 520,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "修改主机名",
+      "brief": "把两台路由器分别改名为 AR1 和 AR2。",
+      "why": "机房设备多，主机名是排障时第一眼要看的标识，后面看 BGP 邻居时也靠它区分设备。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 之后用 sysname 改名字。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2 换成 sysname AR2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配置互联接口地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，AR2 的 GE0/0/0 配 10.0.12.2/24，并加 description。",
+      "why": "eBGP 邻居默认用直连接口地址建立，两端必须在同一网段；description 写清对端设备，现场插错线能马上发现。",
+      "hints": [
+        "进接口视图配 IP 地址，顺手用 description 标一下对端。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址，description to_AR2 写描述。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\nip address 10.0.12.1 24\ndescription to_AR2\nquit\nreturn\n\nAR2 换成 10.0.12.2 和 description to_AR1。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.1 24",
+          "description to_AR2",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.2 24",
+          "description to_AR1",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "验证直连互通",
+      "brief": "从 AR1 ping 10.0.12.2，四包全通。",
+      "why": "BGP 邻居建立依赖底层 IP 可达，直连都不通就别往下配 BGP 了。",
+      "hints": [
+        "直接 ping 对端接口地址。",
+        "ping -c 4 10.0.12.2",
+        "ping -c 4 10.0.12.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配置 Loopback 接口",
+      "brief": "AR1 配 Loopback0 1.1.1.1/32，AR2 配 Loopback0 2.2.2.2/32。",
+      "why": "BGP 通告的网段一般用 Loopback 模拟业务网段，/32 掩码是工程上最常见的写法，也方便后面验证路由表。",
+      "hints": [
+        "用 interface LoopBack 0 进环回口视图，配 /32 地址。",
+        "interface LoopBack0 进环回口，ip address 1.1.1.1 32 配地址。",
+        "AR1：\nsystem-view\ninterface LoopBack0\nip address 1.1.1.1 32\nquit\nreturn\n\nAR2 换成 2.2.2.2 32。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief | include LoopBack",
+          "expect": "1.1.1.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief | include LoopBack",
+          "expect": "2.2.2.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 1.1.1.1 32",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 2.2.2.2 32",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "启动 BGP 并指定 AS 号",
+      "brief": "AR1 启动 BGP 65001，AR2 启动 BGP 65002。",
+      "why": "AS 号是 eBGP 的身份标识，两边 AS 号必须不同才是 eBGP，配错了邻居起不来。",
+      "hints": [
+        "系统视图下用 bgp 加 AS 号进 BGP 视图。",
+        "bgp 65001 进 BGP 视图，后面才能配邻居。",
+        "AR1：\nsystem-view\nbgp 65001\nquit\nreturn\n\nAR2 换成 bgp 65002。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display bgp peer",
+          "expect": "65001"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display bgp peer",
+          "expect": "65002"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "bgp 65001",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "bgp 65002",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "配置 eBGP 邻居",
+      "brief": "AR1 指邻居 10.0.12.2 属于 AS 65002，AR2 指邻居 10.0.12.1 属于 AS 65001。",
+      "why": "eBGP 邻居必须手工指定对端 AS 号，这是和 iBGP 最大的区别；两边地址和 AS 号要互相对应。",
+      "hints": [
+        "在 BGP 视图下用 peer 命令指定邻居 IP 和对端 AS 号。",
+        "peer 10.0.12.2 as-number 65002 这种格式，AR2 反过来写。",
+        "AR1：\nsystem-view\nbgp 65001\npeer 10.0.12.2 as-number 65002\nquit\nreturn\n\nAR2：\nsystem-view\nbgp 65002\npeer 10.0.12.1 as-number 65001\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display bgp peer",
+          "expect": "10.0.12.2"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display bgp peer",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "bgp 65001",
+          "peer 10.0.12.2 as-number 65002",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "bgp 65002",
+          "peer 10.0.12.1 as-number 65001",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "验证邻居状态 Established",
+      "brief": "在 AR1 上查看 BGP 邻居，状态应为 Established。",
+      "why": "Established 是 BGP 邻居能正常交换路由的前提，看到这个状态才说明 TCP 179 连接和 Open 报文都成功了。",
+      "hints": [
+        "用 display bgp peer 看邻居状态那一列。",
+        "display bgp peer 输出里找 State 列，应该是 Established。",
+        "display bgp peer"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display bgp peer",
+          "expect": "Established"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display bgp peer",
+          "expect": "Established"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display bgp peer"
+        ],
+        "AR2": [
+          "display bgp peer"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "通告自己的 Loopback 网段",
+      "brief": "AR1 用 network 1.1.1.1 32 通告，AR2 用 network 2.2.2.2 32 通告。",
+      "why": "BGP 不会自动把接口网段放进路由表，必须手工 network 精确匹配路由表里已有的条目，这是工程上最容易漏的一步。",
+      "hints": [
+        "在 BGP 视图下用 network 命令，后面跟掩码。",
+        "network 1.1.1.1 32 通告 AR1 的环回口，AR2 换成 2.2.2.2 32。",
+        "AR1：\nsystem-view\nbgp 65001\nnetwork 1.1.1.1 32\nquit\nreturn\n\nAR2：\nsystem-view\nbgp 65002\nnetwork 2.2.2.2 32\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display bgp routing-table",
+          "expect": "1.1.1.1/32"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display bgp routing-table",
+          "expect": "2.2.2.2/32"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "bgp 65001",
+          "network 1.1.1.1 32",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "bgp 65002",
+          "network 2.2.2.2 32",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "验证 BGP 路由表收到对端网段",
+      "brief": "在 AR1 的 BGP 路由表里看到 2.2.2.2/32，AR2 里看到 1.1.1.1/32。",
+      "why": "邻居 Established 只代表能对话，路由表里有对端网段才说明路由真的传过来了，这是 eBGP 实验的最终验收点。",
+      "hints": [
+        "用 display bgp routing-table 看 BGP 路由表。",
+        "AR1 上找 2.2.2.2/32，下一跳应该是 10.0.12.2。",
+        "AR1：\ndisplay bgp routing-table\n\nAR2：\ndisplay bgp routing-table"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display bgp routing-table",
+          "expect": "2.2.2.2/32"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display bgp routing-table",
+          "expect": "1.1.1.1/32"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display bgp routing-table"
+        ],
+        "AR2": [
+          "display bgp routing-table"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "从 AR1 ping 对端 Loopback 验证端到端",
+      "brief": "从 AR1 ping 2.2.2.2，四包全通。",
+      "why": "BGP 路由表里有条目还不够，要确认路由真的进了 IP 路由表并且能转发，ping 通才算闭环。",
+      "hints": [
+        "直接 ping 对端环回口地址。",
+        "ping -c 4 2.2.2.2",
+        "ping -c 4 2.2.2.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 2.2.2.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 2.2.2.2"
+        ]
+      }
+    }
+  ],
+  "id": "bgp-ebgp",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器建立 eBGP 邻居，AS 65001 和 AS 65002，互相通告自己的网段，验证 BGP 路由表和邻居状态 Established",
+  "syllabus": [
+    "HCIP-Datacom BGP 核心知识（17%）"
+  ]
+}

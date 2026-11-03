@@ -1,0 +1,182 @@
+{
+  "courses": [
+    {
+      "id": "hcia-datacom",
+      "title": "HCIA → HCIP Datacom 考证路线",
+      "stages": [
+        {
+          "name": "第 1 站 · 打基础",
+          "syllabus": "HCIA-Datacom 第 1 章 网络基础（8%）",
+          "labs": [
+            "static-route"
+          ],
+          "quiz": []
+        },
+        {
+          "name": "第 2 站 · 交换网",
+          "syllabus": "HCIA-Datacom 第 3 章 以太交换（28%）",
+          "labs": [
+            "vlan-cross",
+            "vlanif-route",
+            "link-agg",
+            "rstp"
+          ],
+          "quiz": [
+            "qz-trunk",
+            "qz-stp-root",
+            "qz-port-sec"
+          ]
+        },
+        {
+          "name": "第 3 站 · 路由入门",
+          "syllabus": "HCIA-Datacom 第 2 章 IP 互联（27%）",
+          "labs": [
+            "ospf-single"
+          ],
+          "quiz": [
+            "qz-static-nh"
+          ]
+        },
+        {
+          "name": "第 4 站 · 安全与服务",
+          "syllabus": "HCIA-Datacom 第 4、5 章（13%）",
+          "labs": [
+            "acl-adv",
+            "nat-easyip",
+            "dhcp-relay"
+          ],
+          "quiz": [
+            "qz-acl-dir",
+            "qz-nat-miss",
+            "qz-dhcp-relay"
+          ]
+        },
+        {
+          "name": "第 5 站 · 高可用",
+          "syllabus": "HCIP-Datacom 网络可靠性（8%）",
+          "labs": [
+            "vrrp-gateway"
+          ],
+          "quiz": [
+            "qz-vrrp-pri"
+          ]
+        },
+        {
+          "name": "第 6 站 · 考排错",
+          "syllabus": "HCIA 通关检查",
+          "labs": [
+            "tr-vlan",
+            "tr-route"
+          ],
+          "quiz": []
+        },
+        {
+          "name": "第 7 站 · 进 OSPF 深水区",
+          "syllabus": "HCIP-Datacom OSPF 核心（16%）",
+          "labs": [
+            "ospf-multiarea",
+            "ospf-auth"
+          ],
+          "quiz": [
+            "qz-ospf-area",
+            "qz-ospf-silent"
+          ]
+        },
+        {
+          "name": "第 8 站 · BGP 与路由控制",
+          "syllabus": "HCIP-Datacom BGP 核心（17%）",
+          "labs": [
+            "bgp-ebgp",
+            "static-float"
+          ],
+          "quiz": [
+            "qz-bgp-as",
+            "qz-route-filter"
+          ]
+        },
+        {
+          "name": "第 9 站 · 交换进阶与安全",
+          "syllabus": "HCIP-Datacom 高级以太网与安全",
+          "labs": [
+            "port-security"
+          ],
+          "quiz": [
+            "qz-trunk-vlan",
+            "qz-dhcp-snoop"
+          ]
+        },
+        {
+          "name": "第 10 站 · 综合排错",
+          "syllabus": "HCIP-Datacom 故障排查（10%）",
+          "labs": [
+            "tr-ospf"
+          ],
+          "quiz": []
+        }
+      ]
+    },
+    {
+      "id": "hcie",
+      "title": "HCIE-Datacom 进阶路线",
+      "stages": [
+        {
+          "name": "第 1 站 · OSPF 综合",
+          "syllabus": "HCIP/HCIE OSPF 区域与汇总",
+          "labs": [
+            "ospf-multiarea",
+            "ospf-auth"
+          ],
+          "quiz": [
+            "qz-ospf-area",
+            "qz-ospf-silent"
+          ]
+        },
+        {
+          "name": "第 2 站 · BGP 深入",
+          "syllabus": "HCIP/HCIE BGP 属性与过滤",
+          "labs": [
+            "bgp-ebgp"
+          ],
+          "quiz": [
+            "qz-bgp-as",
+            "qz-route-filter"
+          ]
+        },
+        {
+          "name": "第 3 站 · 路由控制",
+          "syllabus": "HCIP 路由与流量控制",
+          "labs": [
+            "static-float"
+          ],
+          "quiz": [
+            "qz-route-filter"
+          ]
+        },
+        {
+          "name": "第 4 站 · MPLS 与 VPN",
+          "syllabus": "HCIP-Datacom MPLS 技术（19%）",
+          "labs": [
+            "mpls-ldp"
+          ],
+          "quiz": []
+        },
+        {
+          "name": "第 5 站 · IPv6 双栈",
+          "syllabus": "HCIP IPv6 路由（20%）",
+          "labs": [
+            "ipv6-dual"
+          ],
+          "quiz": []
+        },
+        {
+          "name": "第 6 站 · 综合排错",
+          "syllabus": "HCIE 排错能力",
+          "labs": [
+            "tr-ospf"
+          ],
+          "quiz": []
+        }
+      ]
+    }
+  ]
+}

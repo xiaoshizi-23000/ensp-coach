@@ -1,0 +1,51 @@
+{
+  "id": "port-security",
+  "title": "端口安全与 MAC 地址管理",
+  "level": "HCIA",
+  "cat": "安全",
+  "keys": [
+    "Port Security",
+    "端口安全",
+    "MAC 地址绑定",
+    "MAC 地址漂移",
+    "MAC 地址表",
+    "Sticky MAC",
+    "安全动态 MAC"
+  ],
+  "one": "限制交换机端口可学习的 MAC 数量与来源，防止 MAC 泛洪和私接。",
+  "analogy": "端口安全就像小区门禁：每个单元门只允许登记过的住户刷卡进门，还限制最多登记几户。陌生人想混进来，要么刷不开，要么一刷就报警把门锁死。这样既防外人乱进，也防有人拿一堆假卡把门禁系统刷爆。",
+  "body": "## 为什么需要端口安全\n\n二层交换机默认行为是“来者不拒”：从某个端口收到源 MAC 为 X 的帧，就把 X 学到 MAC 地址表里并关联该端口，同时把目的 MAC 为 X 的帧从该端口转发出去。这个设计让接入极其方便，但也带来三类问题：\n\n1. **MAC 泛洪攻击**：攻击者用工具不断伪造源 MAC 发包，迅速填满交换机 MAC 地址表（VRP 上默认容量有限，如 S5700 系列单板通常为 16K 量级）。表满后，未知单播帧只能泛洪到所有端口，攻击者即可旁路嗅探本不属于自己的流量。\n2. **私接与地址冒用**：办公口被私自接上家用路由器、HUB 或另一台交换机，导致一个端口下出现大量 MAC；或者有人把别人的 MAC 配到自己网卡上，冒名顶替。\n3. **MAC 地址漂移**：同一 MAC 在两个端口间反复学习，引起 MAC 表震荡、流量路径错乱，严重时影响转发。\n\n端口安全（Port Security）就是把这些“默认信任”改成“白名单 + 配额”的机制：限定端口能学多少 MAC、能学哪些 MAC、违规后怎么处理。\n\n## 三种 MAC 地址表项\n\n理解端口安全，先要分清端口安全引入的几类表项：\n\n| 类型 | 产生方式 | 是否老化 | 掉电/重启后 |\n|---|---|---|---|\n| 动态 MAC | 正常学习 | 是（默认 300s） | 丢失 |\n| 安全动态 MAC | 开启端口安全后学习到的 MAC | 默认不老化（可配老化） | 丢失 |\n| Sticky MAC（粘滞 MAC） | 开启 sticky 后学习并写入配置 | 不老化 | 保留（写入配置文件） |\n| 静态 MAC | 手工 `mac-address static` 绑定 | 不老化 | 保留 |\n\n关键区别：**安全动态 MAC 只存在于 MAC 表中，不落配置**；**Sticky MAC 会转成静态表项并写入配置文件**，设备重启后依然生效。现场常用 sticky 做“一次学习、永久绑定”，省去逐条手工录入。\n\n## 工作机制\n\n### 基本流程\n\n1. 在接口下 `port-security enable`，端口进入安全模式。\n2. 端口收到帧，提取源 MAC，查 MAC 表：\n   - 若该 MAC 已在安全表项中且属于本端口 → 正常转发；\n   - 若是新 MAC 且未超过 `port-security maximum` 限制 → 学习为安全动态 MAC（或 sticky MAC），转发；\n   - 若超过数量上限，或该 MAC 已绑定在其他端口 → 判定为**违规（violation）**。\n3. 违规后按 `port-security protect-action` 处理。\n\n### 三种违规动作\n\n- **protect**：丢弃违规报文，不告警、不关闭端口。最“安静”，适合不想影响业务但能容忍少量非法流量的场景。\n- **restrict**：丢弃违规报文，同时上报告警（告警日志 / SNMP trap），端口保持 up。适合需要审计的场景。\n- **shutdown**：端口直接置为 error-down（物理上仍 up，逻辑关闭），并告警。默认动作，最严格。恢复需手工 `shutdown` / `undo shutdown`，或配置 `port-security timer autolearn` 之外的自动恢复（`error-auto-recovery`）。\n\n注意：**protect 与 restrict 只丢违规帧，端口继续工作**；shutdown 则是“一刀切”，一个非法 MAC 就能让整口业务中断，生产上要评估误杀风险。\n\n### 数量限制与学习方式\n\n`port-security maximum <n>` 设定该端口允许的安全 MAC 总数，默认 1。这个值直接决定防泛洪能力：设为 1 表示只允许一台终端；接 IP 电话 + PC 的场景要设 2 或以上。\n\n学习方式有两种：\n\n- **自动学习（autolearn）**：先放行学习，学满后转为只认已学 MAC。适合“先上线后固化”的部署节奏。\n- **手工绑定**：`port-security mac-address sticky` 配合静态配置，或直接 `mac-address static` 绑定，做到“只认名单”。\n\n### MAC 地址漂移检测\n\n当同一 MAC 先在某安全端口学到，又从另一个端口收到源为该 MAC 的帧，即发生漂移。端口安全可将其视为违规：原端口或新端口按策略处理。这能有效发现“同一 IP/MAC 出现在两个接入点”的私接、环路或攻击行为。\n\n## 与其他技术的关系\n\n- **与 MAC 地址表**：端口安全是 MAC 表之上的策略层，不改变学习算法，只增加准入判断。\n- **与 DHCP Snooping / IPSG**：端口安全管“MAC 层面谁能进来”，DHCP Snooping 管“IP 从哪来”，IPSG 依据绑定表校验源 IP。三者常组合部署：端口安全防泛洪，DHCP Snooping 建绑定表，IPSG 防 IP 冒用。\n- **与 802.1X**：802.1X 做用户级认证，端口安全做设备级 MAC 白名单，粒度不同，可叠加。\n- **与风暴控制**：风暴控制按广播/组播/未知单播速率限流，端口安全按 MAC 数量限制，互补而非替代。\n\n## 设计取舍\n\n端口安全把“即插即用”换成了“可控准入”，代价是运维成本：MAC 变更、终端更换、IP 电话换机都要改配置。因此现场通常采用 **sticky + 较大 maximum + restrict** 的组合，在安全与可用之间取平衡；对高安全区（财务、机房）才用 shutdown + 手工绑定。另外，安全动态 MAC 默认不老化，长期运行会占表项，需关注表容量与老化策略。",
+  "cmds": [
+    "display port-security",
+    "display mac-address security",
+    "display port-security interface GigabitEthernet0/0/1",
+    "display mac-address sticky",
+    "display error-down recovery"
+  ],
+  "pits": [
+    "maximum 默认值为 1，接 IP 电话或下挂小交换机时易误杀",
+    "shutdown 动作默认开启，违规后端口 error-down，需手工恢复",
+    "sticky MAC 写入配置，批量部署前想清楚是否真要固化",
+    "安全动态 MAC 默认不老化，长期运行注意表项占用",
+    "protect 动作不告警，排错时容易误以为没生效"
+  ],
+  "qa": [
+    {
+      "q": "端口安全的三种违规动作有什么区别？",
+      "a": "protect 丢弃违规报文不告警；restrict 丢弃并告警，端口保持 up；shutdown 将端口置 error-down 并告警，默认动作，需手工或自动恢复。"
+    },
+    {
+      "q": "安全动态 MAC 和 Sticky MAC 的区别？",
+      "a": "安全动态 MAC 只存在于 MAC 表、不老化、重启丢失；Sticky MAC 学习后转为静态表项并写入配置文件，重启后仍生效。"
+    },
+    {
+      "q": "端口安全能否防止 MAC 泛洪攻击？",
+      "a": "能。通过 port-security maximum 限制端口可学习 MAC 数量，超限即触发违规动作，阻止攻击者填满整张 MAC 表。"
+    },
+    {
+      "q": "MAC 地址漂移在端口安全中如何处理？",
+      "a": "同一 MAC 从另一端口被学习即判定漂移，按 protect/restrict/shutdown 策略处理，可发现私接、环路与冒用。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 网络安全技术（端口安全与 MAC 地址管理）"
+}

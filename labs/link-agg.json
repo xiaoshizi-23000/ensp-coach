@@ -1,0 +1,300 @@
+{
+  "title": "Eth-Trunk 手工模式链路聚合",
+  "subtitle": "两条链路捆绑成 Eth-Trunk，验证 Selected 与 2G 带宽",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "Eth-Trunk",
+    "链路聚合"
+  ],
+  "intro": "两台 S5700 之间用两条 GE 链路做手工模式 Eth-Trunk，把成员口加进去，最后确认成员口是 Selected 状态、聚合带宽叠加到 2G。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "SW2",
+      "model": "S5700",
+      "x": 520,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/1",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/2",
+      "b": "SW2",
+      "bPort": "GE0/0/2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "把两台交换机分别改名为 SW1 和 SW2。",
+      "why": "机房设备多，先按命名规范把名字定下来，后面看回显、查日志才不会认错设备。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 之后用 sysname 改名字，改完 return 回用户视图。",
+        "SW1：\nsystem-view\nsysname SW1\nreturn\n\nSW2 换成 sysname SW2。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "sysname SW2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "给物理口写 description",
+      "brief": "SW1 和 SW2 的 GE0/0/1、GE0/0/2 都写上用途描述。",
+      "why": "现场排障第一眼看的就是 description，标明“到 SW2 的聚合成员口”，以后拔错线能立刻发现。",
+      "hints": [
+        "进接口视图，用 description 加描述文字。",
+        "interface GigabitEthernet0/0/1 进接口，description xxx 写描述，quit 退出。",
+        "SW1：\nsystem-view\ninterface GigabitEthernet0/0/1\ndescription to-SW2-EthTrunk-member1\nquit\ninterface GigabitEthernet0/0/2\ndescription to-SW2-EthTrunk-member2\nquit\nreturn\n\nSW2 把 to-SW2 改成 to-SW1。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display interface description | include GE0/0/1",
+          "expect": "to-SW2-EthTrunk-member1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-SW2-EthTrunk-member1",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "description to-SW2-EthTrunk-member2",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-SW1-EthTrunk-member1",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "description to-SW1-EthTrunk-member2",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "创建 Eth-Trunk 逻辑口",
+      "brief": "两台交换机都创建 Eth-Trunk 1，模式用手工负载分担。",
+      "why": "Eth-Trunk 是一个逻辑接口，先把逻辑口建出来，物理口才有地方挂。手工模式下两端不跑 LACP 协商，适合对端不支持 LACP 或要求快速起链路的场景。",
+      "hints": [
+        "在系统视图下用 interface Eth-Trunk 创建逻辑口，再指定工作模式。",
+        "interface Eth-Trunk 1 进逻辑口，mode manual load-balance 指定手工模式。",
+        "SW1：\nsystem-view\ninterface Eth-Trunk 1\nmode manual load-balance\nquit\nreturn\n\nSW2 同样操作。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "Eth-Trunk1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Eth-Trunk 1",
+          "mode manual load-balance",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface Eth-Trunk 1",
+          "mode manual load-balance",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "把成员口加入 Eth-Trunk",
+      "brief": "SW1 和 SW2 都把 GE0/0/1、GE0/0/2 加入 Eth-Trunk 1。",
+      "why": "成员口必须两端都加，且速率、双工、VLAN 配置要一致，否则一端 Selected 另一端 Unselect，流量会断。",
+      "hints": [
+        "进 Eth-Trunk 逻辑口视图，用 trunkport 把物理口加进来。",
+        "interface Eth-Trunk 1 之后 trunkport GigabitEthernet 0/0/1，再 trunkport GigabitEthernet 0/0/2。",
+        "SW1：\nsystem-view\ninterface Eth-Trunk 1\ntrunkport GigabitEthernet 0/0/1\ntrunkport GigabitEthernet 0/0/2\nquit\nreturn\n\nSW2 同样操作。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "Selected"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display eth-trunk 1",
+          "expect": "Selected"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Eth-Trunk 1",
+          "trunkport GigabitEthernet 0/0/1",
+          "trunkport GigabitEthernet 0/0/2",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface Eth-Trunk 1",
+          "trunkport GigabitEthernet 0/0/1",
+          "trunkport GigabitEthernet 0/0/2",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "确认成员口状态",
+      "brief": "查看 Eth-Trunk 1 的成员口，两个口都应是 Selected。",
+      "why": "Selected 表示这个成员口被聚合组选中、正在转发流量；Unselect 说明参数不匹配或对端没配好，必须先排掉再往下走。",
+      "hints": [
+        "用 display eth-trunk 1 看成员口列表和状态列。",
+        "重点看 Status 列，两个 GE 口都应为 Selected。",
+        "display eth-trunk 1"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "Selected"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display eth-trunk 1"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "验证带宽叠加到 2G",
+      "brief": "查看 Eth-Trunk 1 的带宽字段，应为 2Gbps。",
+      "why": "两条 1G 成员口聚合后逻辑口带宽是 2G，这是链路聚合最直接的收益，也是验收时要截图留档的指标。",
+      "hints": [
+        "display eth-trunk 1 的输出里有 Bandwidth 一行。",
+        "看 Bandwidth 后面的数值是不是 2Gbps。",
+        "display eth-trunk 1"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "2Gbps"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display eth-trunk 1"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "验证链路冗余",
+      "brief": "shutdown 掉 SW1 的 GE0/0/2，再看 Eth-Trunk 1 是否仍有成员口 Selected。",
+      "why": "聚合的意义不只是带宽，还有冗余。断一条成员口，业务应无感知，剩下那条继续转发，这就是现场最关心的可靠性。",
+      "hints": [
+        "进 GE0/0/2 接口视图执行 shutdown，然后回来看 Eth-Trunk 状态。",
+        "interface GigabitEthernet0/0/2 之后 shutdown，quit 后用 display eth-trunk 1 查看。",
+        "system-view\ninterface GigabitEthernet0/0/2\nshutdown\nquit\ndisplay eth-trunk 1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "Selected"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/2",
+          "shutdown",
+          "quit",
+          "display eth-trunk 1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "恢复成员口",
+      "brief": "把 SW1 的 GE0/0/2 重新 undo shutdown，确认两个成员口都回到 Selected。",
+      "why": "实验做完要把现场恢复成初始状态，避免留下 shutdown 的口给后面的人踩坑。",
+      "hints": [
+        "进 GE0/0/2 接口视图执行 undo shutdown。",
+        "interface GigabitEthernet0/0/2 之后 undo shutdown，再查 Eth-Trunk。",
+        "system-view\ninterface GigabitEthernet0/0/2\nundo shutdown\nquit\ndisplay eth-trunk 1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display eth-trunk 1",
+          "expect": "2Gbps"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/2",
+          "undo shutdown",
+          "quit",
+          "display eth-trunk 1",
+          "return"
+        ]
+      }
+    }
+  ],
+  "id": "link-agg",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台交换机之间拉两条链路做 Eth-Trunk 手工模式，加成员口，验证成员口是 Selected、带宽叠加到 2G",
+  "syllabus": [
+    "HCIA-Datacom 3.3 链路聚合"
+  ]
+}

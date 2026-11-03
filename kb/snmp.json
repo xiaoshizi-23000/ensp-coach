@@ -1,0 +1,44 @@
+{
+  "id": "snmp",
+  "title": "SNMP 网络管理协议",
+  "level": "HCIA",
+  "cat": "自动化",
+  "keys": [
+    "SNMP",
+    "Simple Network Management Protocol",
+    "简单网络管理协议",
+    "MIB",
+    "OID",
+    "网管"
+  ],
+  "one": "用于监控和管理网络设备的应用层协议，基于 UDP。",
+  "analogy": "SNMP 就像给设备装了个标准化的仪表盘和遥控器。网管软件是司机，通过仪表盘（MIB）读取车速、油量（设备状态），也能按按钮（Set）调整空调温度（配置）。设备厂商按同一套仪表盘标准（SMI）造表，所以一个司机能开所有品牌的车。",
+  "body": "## 为什么需要 SNMP\n\n网络设备数量多、分布广，管理员不可能逐台登录查看状态。SNMP 提供统一的框架，让网管系统（NMS）远程读取和修改设备的管理信息，实现集中监控和批量配置。\n\n## SNMP 架构\n\nSNMP 采用 Manager/Agent 模型：\n\n- **NMS（Manager）**：网管工作站，发起请求、接收告警。\n- **Agent**：运行在被管设备上的进程，响应请求、主动上报 Trap。\n- **MIB（Management Information Base）**：树形结构的被管对象数据库，每个对象用 OID（Object Identifier）唯一标识。\n- **SMI（Structure of Management Information）**：定义 MIB 对象的语法和类型，保证跨厂商兼容。\n\n## 协议版本\n\n| 版本 | 安全机制 | 说明 |\n|------|----------|------|\n| SNMPv1 | 团体名（community）明文 | 功能简单，安全性差 |\n| SNMPv2c | 团体名明文 | 增加 GetBulk、Inform，性能提升 |\n| SNMPv3 | USM（认证+加密）、VACM | 支持认证（MD5/SHA）和加密（DES/AES），安全性高 |\n\nHCIA 阶段重点掌握 v2c 和 v3 的基本配置。\n\n## 报文类型与操作\n\nSNMP 报文封装在 UDP 中，Agent 默认监听 161 端口，Trap 默认目的端口 162。\n\n| 操作 | 方向 | 作用 |\n|------|------|------|\n| GetRequest | Manager→Agent | 读取一个或多个 OID 的值 |\n| GetNextRequest | Manager→Agent | 读取下一个 OID 的值，用于遍历 MIB 树 |\n| GetBulkRequest | Manager→Agent | v2c 起支持，一次返回多个连续 OID，提高效率 |\n| SetRequest | Manager→Agent | 修改 OID 的值（配置设备） |\n| Response | Agent→Manager | 响应上述请求 |\n| Trap | Agent→Manager | 主动上报事件（如接口 down），无确认 |\n| Inform | Agent→Manager | v2c 起支持，带确认的 Trap |\n\n## 报文格式（以 v2c 为例）\n\nSNMP 报文采用 BER 编码的 ASN.1 结构，主要字段：\n\n- **version**：版本号（0=v1，1=v2c，3=v3）。\n- **community**：团体名，相当于明文密码。\n- **PDU type**：操作类型（0=Get，1=GetNext，2=Response，3=Set，4=Trap，5=GetBulk，6=Inform）。\n- **request-id**：请求标识，用于匹配请求和响应。\n- **error-status / error-index**：错误码和错误位置。\n- **variable-bindings**：OID 和值的列表。\n\n## MIB 与 OID\n\nMIB 是树形结构，根节点下分支，每个节点有编号和名称。例如：\n\n- `1.3.6.1.2.1` 是 mib-2，标准 MIB。\n- `1.3.6.1.2.1.1.5` 是 sysName，设备名称。\n- `1.3.6.1.2.1.2.2.1.10` 是 ifInOctets，接口入字节数。\n\n厂商私有 MIB 在 `1.3.6.1.4.1` 下，华为企业号是 2011。\n\n## SNMPv3 安全机制\n\nSNMPv3 引入 USM（User-based Security Model）和 VACM（View-based Access Control Model）：\n\n- **认证**：确保报文来源真实，常用 HMAC-MD5-96 或 HMAC-SHA-96。\n- **加密**：对报文载荷加密，常用 DES 或 AES-128。\n- **VACM**：基于视图控制用户能访问哪些 OID 子树。\n\n安全级别：noAuthNoPriv、authNoPriv、authPriv。\n\n## 设计取舍\n\n- 基于 UDP：开销小、实现简单，但不可靠，靠超时重传；Trap 可能丢失，重要事件用 Inform。\n- 团体名明文：v1/v2c 部署简单但安全性差，生产环境建议 v3。\n- MIB 标准化：保证互操作，但厂商私有 MIB 导致部分功能依赖厂商网管。\n\n## 与相邻技术分工\n\n- **SNMP**：监控和简单配置，适合周期性采集。\n- **NETCONF/YANG**：更现代、事务化的配置管理，适合自动化编排。\n- **Syslog**：日志上报，与 SNMP Trap 互补。\n- **Telemetry**：高速、亚秒级推送，适合大规模实时监控。\n\nHCIA 阶段要求能配置 SNMP 团体名、版本、Trap 目的主机，并能用网管软件读取设备信息。",
+  "cmds": [
+    "display snmp-agent sys-info",
+    "display snmp-agent community",
+    "display snmp-agent target-host",
+    "display snmp-agent mib-view"
+  ],
+  "pits": [
+    "团体名区分大小写，读写权限要分别配置",
+    "Trap 目的端口默认 162，注意 ACL 放行",
+    "SNMPv3 用户认证和加密算法两端必须一致",
+    "GetBulk 的 max-repetitions 过大会导致响应分片"
+  ],
+  "qa": [
+    {
+      "q": "SNMPv2c 和 SNMPv3 的主要区别是什么？",
+      "a": "v2c 使用明文团体名，无认证加密；v3 增加 USM 认证加密和 VACM 视图控制，安全性更高。"
+    },
+    {
+      "q": "Trap 和 Inform 的区别？",
+      "a": "Trap 无确认，可能丢失；Inform 带确认，Agent 收到响应才停止重传，更可靠。"
+    },
+    {
+      "q": "SNMP 基于哪个传输层协议？端口是多少？",
+      "a": "基于 UDP，Agent 监听 161，Trap 默认发往 162。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 自动化技术"
+}

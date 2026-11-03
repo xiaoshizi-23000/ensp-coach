@@ -1,0 +1,43 @@
+{
+  "id": "ospfv3",
+  "title": "OSPFv3 与 OSPFv2 的差异",
+  "level": "HCIP",
+  "cat": "IPv6",
+  "keys": [
+    "OSPFv3",
+    "OSPFv2",
+    "IPv6路由",
+    "链路状态",
+    "LSA"
+  ],
+  "one": "OSPFv3是OSPFv2的IPv6扩展版，协议机制相似但地址语义和报文格式有重大变化。",
+  "analogy": "OSPFv2像用固定电话号码本找朋友，每个路由器接口都得配个号码（IP地址）才能通信；OSPFv3则像用微信，只要在同一个群里（链路），不用知道对方具体地址也能聊天，地址只用来标识身份，不再参与协议交互。这样设计让IPv6的自动配置和地址灵活性得以发挥。",
+  "body": "## 为什么需要 OSPFv3\n\nOSPFv2 是为 IPv4 设计的，其报文中的很多字段直接携带 IPv4 地址（如 Router ID、Link State ID、接口地址等），无法直接支持 IPv6。虽然可以通过扩展支持 IPv6，但会破坏协议兼容性。因此 IETF 设计了 OSPFv3（RFC 5340），在保持 OSPF 核心机制（链路状态、SPF 计算、区域划分）不变的前提下，对地址语义和报文格式进行了重构，使其与 IPv6 协议族解耦。\n\n## 核心差异\n\n### 1. 基于链路而非网段\n\nOSPFv2 运行在网段上，路由器接口需要配置 IPv4 地址，Hello 报文携带接口地址和掩码，邻居必须同网段。OSPFv3 运行在链路上，协议报文使用链路本地地址（Link-Local Address）作为源地址，不再要求接口配置全局 IPv6 地址。路由器通过链路本地地址建立邻居关系，全局地址仅用于路由计算和转发。\n\n**设计取舍**：这样设计使得 IPv6 的地址自动配置（SLAAC）和临时地址等特性不会影响 OSPF 邻居建立，同时简化了协议状态机。\n\n### 2. 报文格式变化\n\nOSPFv3 报文头部去掉了 OSPFv2 中的 AuType 和 Authentication 字段，认证功能由 IPsec 提供（RFC 4552）。Hello 报文中不再携带网络掩码，因为链路本地地址已隐含了链路范围。\n\nOSPFv3 新增了 Instance ID 字段（8 位），允许在同一链路上运行多个 OSPFv3 实例，类似于 OSPFv2 的进程号但作用于链路层。\n\n### 3. LSA 类型调整\n\nOSPFv3 重新定义了 LSA 类型，主要变化如下：\n\n| LSA 类型 | OSPFv2 名称 | OSPFv3 名称 | 说明 |\n|---------|------------|------------|------|\n| 1 | Router LSA | Router LSA | 不再携带地址信息，仅描述链路拓扑 |\n| 2 | Network LSA | Network LSA | 不再携带掩码，仅描述广播网段上的路由器 |\n| 3 | Summary LSA | Inter-Area-Prefix LSA | 携带 IPv6 前缀和掩码 |\n| 4 | ASBR Summary LSA | Inter-Area-Router LSA | 描述 ASBR 位置 |\n| 5 | AS External LSA | AS-External LSA | 携带 IPv6 前缀 |\n| 7 | NSSA External LSA | NSSA External LSA | 携带 IPv6 前缀 |\n| 8 | - | Link LSA | 新增，携带链路本地地址和全局地址前缀 |\n| 9 | - | Intra-Area-Prefix LSA | 新增，携带区域内前缀信息 |\n\n**关键变化**：OSPFv3 将拓扑信息与地址信息分离。Router LSA 和 Network LSA 只描述拓扑（谁和谁相连），不再包含 IP 地址；地址信息通过新增的 Link LSA（Type 8）和 Intra-Area-Prefix LSA（Type 9）携带。这样设计使得拓扑计算与地址族无关，便于未来扩展。\n\n### 4. 路由器 ID 与区域 ID\n\nOSPFv3 仍然使用 32 位 Router ID 和 Area ID，格式与 OSPFv2 相同，但 Router ID 必须手动配置或通过其他方式选举（如使用 IPv4 地址），因为 IPv6 地址是 128 位。\n\n### 5. 认证机制\n\nOSPFv3 本身不提供认证字段，依赖 IPsec AH/ESP 实现认证和加密。这简化了协议设计，但增加了配置复杂度。\n\n### 6. 多实例与多进程\n\nOSPFv3 支持在同一个链路上运行多个实例（通过 Instance ID 区分），每个实例独立运行 SPF 计算。这类似于 OSPFv2 的多进程，但实例是链路级别的。\n\n## 工作机制\n\nOSPFv3 的状态机与 OSPFv2 基本一致（Down、Init、2-Way、ExStart、Exchange、Loading、Full），但邻居建立过程使用链路本地地址。Hello 报文中包含 Router ID、Area ID、Instance ID、Hello Interval、Router Dead Interval 等参数，邻居必须匹配这些参数才能建立邻接关系。\n\nSPF 计算时，OSPFv3 先根据 Router LSA 和 Network LSA 构建拓扑图，再通过 Intra-Area-Prefix LSA 和 Inter-Area-Prefix LSA 关联前缀信息，最终生成 IPv6 路由表。\n\n## 与 OSPFv2 的共存\n\nOSPFv3 和 OSPFv2 可以同时运行在同一台路由器上，彼此独立。在双栈网络中，通常分别运行 OSPFv2 和 OSPFv3 来支持 IPv4 和 IPv6 路由。\n\n## 总结\n\nOSPFv3 在保持 OSPF 核心机制的同时，针对 IPv6 特性进行了优化：基于链路运行、地址与拓扑分离、依赖 IPsec 认证、支持多实例。这些变化使得 OSPFv3 更适应 IPv6 网络环境，但也带来了配置和排错上的新挑战。",
+  "cmds": [
+    "display ospfv3 peer",
+    "display ospfv3 routing",
+    "display ospfv3 lsdb",
+    "display ospfv3 interface"
+  ],
+  "pits": [
+    "OSPFv3 邻居建立使用链路本地地址，需确保接口启用 IPv6 并配置链路本地地址",
+    "Router ID 必须手动配置或通过 IPv4 地址选举，否则协议无法运行",
+    "认证需通过 IPsec 配置，OSPFv3 本身无认证字段",
+    "多实例场景需确保 Instance ID 匹配，否则邻居无法建立"
+  ],
+  "qa": [
+    {
+      "q": "OSPFv3 与 OSPFv2 的主要区别是什么？",
+      "a": "OSPFv3 基于链路运行，使用链路本地地址；报文去掉了认证字段，依赖 IPsec；LSA 类型调整，拓扑与地址分离；支持多实例；Router ID 仍需 32 位。"
+    },
+    {
+      "q": "OSPFv3 如何实现认证？",
+      "a": "OSPFv3 本身不提供认证，通过 IPsec AH/ESP 实现，需在接口或区域配置 IPsec 安全联盟。"
+    },
+    {
+      "q": "OSPFv3 新增了哪些 LSA 类型？",
+      "a": "新增 Link LSA（Type 8）携带链路本地地址和前缀，Intra-Area-Prefix LSA（Type 9）携带区域内前缀信息。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom  IPv6 路由技术"
+}

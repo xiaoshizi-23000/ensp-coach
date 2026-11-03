@@ -1,0 +1,46 @@
+{
+  "id": "vrp-basics",
+  "title": "VRP 命令行基础与配置管理",
+  "level": "HCIA",
+  "cat": "交换",
+  "keys": [
+    "VRP",
+    "命令行",
+    "配置管理",
+    "视图",
+    "命令视图",
+    "配置文件"
+  ],
+  "one": "华为设备通用路由平台命令行操作与配置管理基础。",
+  "analogy": "VRP 命令行就像一台多功能料理机，不同视图是不同刀头：用户视图是插电待机，系统视图是换刀头，接口视图是调具体刀片。配置管理像菜谱本，记下每步操作，随时回滚或换菜谱。",
+  "body": "## 1. 为什么需要 VRP 命令行\n\n华为数据通信设备（路由器、交换机、防火墙）运行统一的 VRP（Versatile Routing Platform）操作系统。VRP 提供分层的命令行接口（CLI），让工程师通过文本命令完成配置、监控和故障排查。与图形界面相比，CLI 可脚本化、可远程、资源占用低，是网络设备运维的基石。\n\n## 2. 命令视图体系\n\nVRP 采用视图（View）隔离命令权限和上下文。每条命令只在特定视图下生效，避免误操作。\n\n| 视图 | 提示符 | 进入方式 | 主要功能 |\n|------|--------|----------|----------|\n| 用户视图 | `<Huawei>` | 登录后默认 | 查看状态、执行 ping/telnet 等测试命令 |\n| 系统视图 | `[Huawei]` | `system-view` | 全局配置，如接口、路由、安全策略 |\n| 接口视图 | `[Huawei-GigabitEthernet0/0/1]` | `interface GigabitEthernet0/0/1` | 配置具体接口参数 |\n| 协议视图 | `[Huawei-ospf-1]` | `ospf 1` | 配置路由协议 |\n| 用户界面视图 | `[Huawei-ui-vty0-4]` | `user-interface vty 0 4` | 配置远程登录方式 |\n\n- 使用 `quit` 返回上一级视图，`return` 或 `Ctrl+Z` 直接回到用户视图。\n- 视图提示符中的方括号表示系统视图及以上，尖括号表示用户视图。\n\n## 3. 命令语法与帮助\n\nVRP 命令遵循“命令字 + 关键字 + 参数”结构，支持：\n\n- **补全**：输入部分命令后按 `Tab` 键自动补全。\n- **帮助**：`?` 显示当前视图下所有命令或命令参数说明。\n- **简写**：命令可简写为不冲突的前缀，如 `sys` 代表 `system-view`。\n- **历史**：上下方向键调出历史命令。\n\n## 4. 配置管理机制\n\nVRP 的配置分为**运行配置**（current-configuration）和**保存配置**（saved-configuration）。\n\n- 运行配置：设备内存中当前生效的配置，掉电丢失。\n- 保存配置：通过 `save` 命令写入存储介质（如 flash 中的 `vrpcfg.zip`），重启后加载。\n\n配置文件管理命令：\n\n- `display current-configuration`：查看当前运行配置。\n- `display saved-configuration`：查看已保存配置。\n- `save`：保存当前配置到存储介质。\n- `reset saved-configuration`：清除已保存配置（需重启生效）。\n- `compare configuration`：比较当前配置与保存配置的差异。\n\n## 5. 配置回滚与试运行\n\nVRP 支持配置回滚（Configuration Rollback）和试运行（Configuration Trial），用于降低变更风险：\n\n- `configuration commit` 与 `configuration rollback`：在配置变更前生成回滚点，变更后若异常可回滚到指定回滚点。\n- `configuration trial`：试运行配置，不实际生效，用于验证命令正确性。\n\n## 6. 文件系统管理\n\nVRP 提供文件系统操作命令，如 `dir`、`cd`、`copy`、`delete`、`move`、`rename`，用于管理设备存储中的配置文件、系统软件和日志文件。\n\n## 7. 与相邻技术的分工\n\n- **SNMP/Netconf**：用于自动化监控和配置，CLI 仍是底层基础。\n- **AAA**：控制用户登录权限，不同级别用户可执行的命令视图不同。\n- **NTP**：保证日志时间戳准确，便于配置变更审计。\n\n## 8. 设计取舍\n\nVRP 命令行采用视图隔离和命令分级，牺牲了部分灵活性（如跨视图命令需切换），但换来了安全性和可读性。配置管理区分运行配置和保存配置，避免误操作导致配置丢失，但也要求工程师养成 `save` 的习惯。",
+  "cmds": [
+    "display current-configuration",
+    "display saved-configuration",
+    "display this",
+    "save",
+    "compare configuration"
+  ],
+  "pits": [
+    "修改配置后未执行 save，重启后配置丢失。",
+    "在用户视图下执行配置命令会报错，需先 system-view。",
+    "使用 reset saved-configuration 后未重启，配置未真正清除。",
+    "命令简写冲突时需输入完整命令或使用 Tab 补全。",
+    "回滚点未提前创建，故障时无法快速恢复。"
+  ],
+  "qa": [
+    {
+      "q": "VRP 中用户视图和系统视图有什么区别？",
+      "a": "用户视图提示符为 <Huawei>，只能执行查看和测试命令；系统视图提示符为 [Huawei]，可进行全局配置。通过 system-view 进入系统视图。"
+    },
+    {
+      "q": "如何查看当前配置与保存配置的差异？",
+      "a": "使用 compare configuration 命令，可显示当前运行配置与已保存配置的不同之处。"
+    },
+    {
+      "q": "配置回滚有什么作用？",
+      "a": "在变更前创建回滚点，若变更导致异常，可回滚到之前的状态，减少故障恢复时间。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 3.1 VRP 基础"
+}

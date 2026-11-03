@@ -1,0 +1,44 @@
+{
+  "title": "NAT 不生效",
+  "level": "HCIA",
+  "cat": "安全",
+  "symptom": "内网PC能ping通网关，但访问外网全部超时。在出口设备上查看NAT会话，没有任何转换记录生成。",
+  "topology": "flowchart LR\nPC1[PC1] --> SW1[SW1]\nSW1 --> R1[R1 AR2220]\nR1 --> R2[R2 AR2220]\nR2 --> Internet[Internet]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display nat address-group 1",
+      "output": "NAT Address-group 1\n  nat address-group 1 0\n    section 0 200.1.1.10 200.1.1.20\n  Total address number: 11\n  Used address number: 0"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display acl 3000",
+      "output": "Basic ACL 3000, 2 rules\n  rule 5 permit ip source 192.168.10.0 0.0.0.255\n  rule 10 deny ip\n  (match-counter: 0 packets)"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display nat outbound",
+      "output": "interface GigabitEthernet0/0/1\n  nat outbound 3001 address-group 1\n  (no matching traffic)"
+    }
+  ],
+  "options": [
+    {
+      "label": "NAT 引用的 ACL 编号与实际配置的 ACL 3000 不一致",
+      "ok": true
+    },
+    {
+      "label": "NAT 地址池中的公网地址已被全部占用",
+      "ok": false
+    },
+    {
+      "label": "内网 PC 的默认网关配置错误",
+      "ok": false
+    },
+    {
+      "label": "出接口未配置 ip address，链路不可达",
+      "ok": false
+    }
+  ],
+  "explain": "出接口 nat outbound 引用的是 ACL 3001，而实际只配了 ACL 3000，流量匹配不到任何 NAT 规则，因此不生成转换记录。用 display nat outbound 与 display acl 3000 对照即可确认，将引用改为 3000 后恢复。",
+  "id": "qz-nat-miss"
+}

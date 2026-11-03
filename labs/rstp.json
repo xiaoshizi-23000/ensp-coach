@@ -1,0 +1,399 @@
+{
+  "title": "RSTP 三角环网选根",
+  "subtitle": "三台交换机跑 RSTP，把 SW2 推成根桥并看端口角色",
+  "level": "进阶",
+  "minutes": 25,
+  "tags": [
+    "RSTP",
+    "STP",
+    "根桥"
+  ],
+  "intro": "三台 S5700 连成三角环，开启 RSTP 后把 SW2 的优先级调到最低让它当根桥，最后用 display stp 确认 SW2 上两个口都是 ROOT、非根桥上一个口是 ROOT 另一个是 ALTERNATE。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 300,
+      "y": 120
+    },
+    {
+      "name": "SW2",
+      "model": "S5700",
+      "x": 550,
+      "y": 320
+    },
+    {
+      "name": "SW3",
+      "model": "S5700",
+      "x": 300,
+      "y": 520
+    }
+  ],
+  "links": [
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/1",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW2",
+      "aPort": "GE0/0/2",
+      "b": "SW3",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW3",
+      "aPort": "GE0/0/2",
+      "b": "SW1",
+      "bPort": "GE0/0/2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改三台交换机主机名",
+      "brief": "把三台 S5700 分别命名为 SW1、SW2、SW3。",
+      "why": "机房设备多，主机名是排障时第一眼确认设备身份的依据，先改掉再往下配。",
+      "hints": [
+        "你现在在用户视图，提示符是 <Huawei>，配置命令会被拒绝，先 system-view。",
+        "system-view 进系统视图，sysname 改名字，最后 return 回用户视图。",
+        "SW1：\nsystem-view\nsysname SW1\nreturn\n\nSW2 和 SW3 同样操作，换成对应名字。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW2"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW3"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "sysname SW2",
+          "return"
+        ],
+        "SW3": [
+          "system-view",
+          "sysname SW3",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "给互联接口加描述",
+      "brief": "三个互联口都加 description，标明对端设备。",
+      "why": "环网里接口多，description 是现场唯一能直接看出这条线连到哪的依据，出问题不用翻拓扑图。",
+      "hints": [
+        "进接口视图用 interface GigabitEthernet0/0/x，description 后面跟文字。",
+        "SW1 的 GE0/0/1 连 SW2、GE0/0/2 连 SW3，SW2 的 GE0/0/2 连 SW3。",
+        "SW1：\nsystem-view\ninterface GigabitEthernet0/0/1\ndescription to-SW2\nquit\ninterface GigabitEthernet0/0/2\ndescription to-SW3\nquit\nreturn\n\nSW2 和 SW3 按拓扑加对应描述。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display interface description | include GE0/0/1",
+          "expect": "to-SW2"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display interface description | include GE0/0/2",
+          "expect": "to-SW3"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display interface description | include GE0/0/2",
+          "expect": "to-SW1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-SW2",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "description to-SW3",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-SW1",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "description to-SW3",
+          "quit",
+          "return"
+        ],
+        "SW3": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-SW2",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "description to-SW1",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "三台交换机开启 RSTP",
+      "brief": "全局把生成树模式改成 rstp。",
+      "why": "S5700 默认跑 MSTP，不显式切到 RSTP 的话端口角色和收敛行为跟实验目标对不上，现场做 RSTP 一定要先确认模式。",
+      "hints": [
+        "生成树模式是全局命令，在系统视图下敲。",
+        "stp mode rstp 一条命令搞定，三台都要配。",
+        "SW1：\nsystem-view\nstp mode rstp\nreturn\n\nSW2、SW3 同样执行 stp mode rstp。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display stp | include Mode",
+          "expect": "Mode : RSTP"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display stp | include Mode",
+          "expect": "Mode : RSTP"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display stp | include Mode",
+          "expect": "Mode : RSTP"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "stp mode rstp",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "stp mode rstp",
+          "return"
+        ],
+        "SW3": [
+          "system-view",
+          "stp mode rstp",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "观察默认根桥是谁",
+      "brief": "在 SW1 上看当前根桥 ID，确认默认按 MAC 选出来的根。",
+      "why": "先看默认状态，后面改优先级之后才有对比，不然你不知道根桥到底有没有被抢过来。",
+      "hints": [
+        "display stp 输出里找 CIST Root/ERPC 那一行，根桥 ID 就在里面。",
+        "display stp 看 CIST Root/ERPC 和 CIST Bridge 两行。",
+        "display stp"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display stp | include CIST Root/ERPC",
+          "expect": "CIST Root/ERPC"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display stp"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "把 SW2 优先级调到最低",
+      "brief": "SW2 上执行 stp root primary，让它成为根桥。",
+      "why": "根桥选举先比优先级再比 MAC，stp root primary 会把优先级直接压到 0，比手工敲 4096 更稳，现场推根桥都这么干。",
+      "hints": [
+        "根桥是全局属性，在系统视图下配。",
+        "stp root primary 一条命令，SW2 执行即可。",
+        "SW2：\nsystem-view\nstp root primary\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display stp | include CIST Bridge",
+          "expect": "0        ."
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "system-view",
+          "stp root primary",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "确认 SW2 已成根桥",
+      "brief": "在 SW1 和 SW3 上看根桥 ID 是否变成 SW2 的桥 ID。",
+      "why": "根桥不是自己说了算，要在非根桥上看到根桥 ID 指向 SW2 才算选举生效。",
+      "hints": [
+        "display stp 里 CIST Root/ERPC 那一行的根桥 ID 应该和 SW2 的 CIST Bridge 一致。",
+        "分别在三台设备上 display stp，对比 CIST Root 和 CIST Bridge。",
+        "SW1：\ndisplay stp | include CIST Root/ERPC\n\nSW3：\ndisplay stp | include CIST Root/ERPC"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display stp | include CIST Root/ERPC",
+          "expect": "CIST Root/ERPC"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display stp | include CIST Root/ERPC",
+          "expect": "CIST Root/ERPC"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display stp"
+        ],
+        "SW3": [
+          "display stp"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "看 SW2 两个口的端口角色",
+      "brief": "SW2 作为根桥，两个互联口都应该是 ROOT 角色。",
+      "why": "根桥所有端口都是指定口，但 RSTP 里根桥上看到的角色是 ROOT，这是判断根桥是否正常工作的直接证据。",
+      "hints": [
+        "display stp interface GigabitEthernet0/0/1 看单个口，或者 display stp brief 看全部。",
+        "display stp brief 输出里 Port Role 列，ROOT 就是根端口。",
+        "SW2：\ndisplay stp brief"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display stp brief | include GE0/0/1",
+          "expect": "ROOT"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display stp brief | include GE0/0/2",
+          "expect": "ROOT"
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "display stp brief"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "看非根桥的 ROOT 和 ALTERNATE",
+      "brief": "SW1 和 SW3 上各有一个 ROOT 口和一个 ALTERNATE 口。",
+      "why": "三角环必须断一个口防环，RSTP 把被阻塞的口标成 ALTERNATE，它随时能顶上 ROOT 口，这就是 RSTP 快速收敛的底气。",
+      "hints": [
+        "display stp brief 看 Port Role 列，ROOT 和 ALTERNATE 各一个。",
+        "SW1 和 SW3 分别 display stp brief，找 ROOT 和 ALTERNATE。",
+        "SW1：\ndisplay stp brief\n\nSW3：\ndisplay stp brief"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display stp brief | include ROOT",
+          "expect": "ROOT"
+        },
+        {
+          "dev": "SW1",
+          "cmd": "display stp brief | include ALTERNATE",
+          "expect": "ALTERNATE"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display stp brief | include ROOT",
+          "expect": "ROOT"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display stp brief | include ALTERNATE",
+          "expect": "ALTERNATE"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display stp brief"
+        ],
+        "SW3": [
+          "display stp brief"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "验证环网收敛状态",
+      "brief": "确认三台设备 STP 状态都是 forwarding，没有异常。",
+      "why": "端口角色对了还要确认状态是 forwarding，否则可能是协商卡住，现场排障最后一步一定看状态。",
+      "hints": [
+        "display stp brief 里 STP State 列应该是 FORWARDING，ALTERNATE 口是 DISCARDING。",
+        "三台都 display stp brief，逐口看 STP State。",
+        "SW1：\ndisplay stp brief\n\nSW2：\ndisplay stp brief\n\nSW3：\ndisplay stp brief"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display stp brief | include FORWARDING",
+          "expect": "FORWARDING"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display stp brief | include FORWARDING",
+          "expect": "FORWARDING"
+        },
+        {
+          "dev": "SW3",
+          "cmd": "display stp brief | include FORWARDING",
+          "expect": "FORWARDING"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display stp brief"
+        ],
+        "SW2": [
+          "display stp brief"
+        ],
+        "SW3": [
+          "display stp brief"
+        ]
+      }
+    }
+  ],
+  "id": "rstp",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "三台交换机连成三角环网跑 RSTP，把 SW2 设成根桥，然后看端口角色是不是 ROOT 和 ALTERNATE",
+  "syllabus": [
+    "HCIA-Datacom 3.2 RSTP",
+    "HCIP-Datacom 交换核心知识"
+  ]
+}

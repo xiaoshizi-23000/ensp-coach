@@ -1,0 +1,316 @@
+{
+  "title": "DHCP中继配置",
+  "subtitle": "AR1做DHCP服务器，AR2做中继给PC分地址",
+  "level": "进阶",
+  "minutes": 30,
+  "tags": [
+    "DHCP",
+    "DHCP中继",
+    "地址池"
+  ],
+  "intro": "AR1 上建全局地址池给 192.168.10.0/24 分配地址，AR2 在 PC 所在网关上开启 DHCP 中继指向 AR1，最终 PC 能自动拿到 192.168.10.x 的地址和网关。",
+  "devices": [
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 300,
+      "ip": "192.168.10.254",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 350,
+      "y": 300
+    },
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 600,
+      "y": 300
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "AR2",
+      "aPort": "GE0/0/1",
+      "b": "AR1",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "把两台路由器分别命名为 AR1 和 AR2。",
+      "why": "机房设备多，主机名是排障时第一眼确认设备的依据，先改掉避免后面敲错设备。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 后 sysname AR1，AR2 同理。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2：\nsystem-view\nsysname AR2\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配AR1服务器侧接口",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，作为 DHCP 服务器的源接口。",
+      "why": "DHCP 中继把请求单播发给服务器，服务器回包源地址就是这个接口地址，必须先有地址。",
+      "hints": [
+        "进接口视图配地址，顺手加 description 标清对端。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR2\nip address 10.0.12.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR2",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配AR2互联与网关接口",
+      "brief": "AR2 的 GE0/0/1 配 10.0.12.2/24，GE0/0/0 配 192.168.10.1/24。",
+      "why": "GE0/0/1 是到服务器的互联地址，GE0/0/0 是 PC 的网关地址，中继必须配在网关接口上。",
+      "hints": [
+        "两个接口分别进接口视图配地址，别配反了。",
+        "interface GigabitEthernet0/0/1 配 10.0.12.2 24，interface GigabitEthernet0/0/0 配 192.168.10.1 24。",
+        "system-view\ninterface GigabitEthernet0/0/1\ndescription to-AR1\nip address 10.0.12.2 24\nquit\ninterface GigabitEthernet0/0/0\ndescription to-PC1\nip address 192.168.10.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-AR1",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "interface GigabitEthernet0/0/0",
+          "description to-PC1",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "验证互联互通",
+      "brief": "从 AR2 ping 10.0.12.1，四包全通。",
+      "why": "中继和服务器之间必须三层可达，先确认直连没问题，后面 DHCP 不通就只查 DHCP 配置。",
+      "hints": [
+        "直接 ping 对端互联地址。",
+        "ping -c 4 10.0.12.1",
+        "ping -c 4 10.0.12.1"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "ping -c 4 10.0.12.1",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "ping -c 4 10.0.12.1"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "AR1开DHCP并建地址池",
+      "brief": "AR1 全局开启 DHCP，建地址池 pool10，网段 192.168.10.0/24，网关 192.168.10.1。",
+      "why": "地址池的 gateway-list 必须写 PC 的网关地址，否则 PC 拿到地址也没有默认网关，出不了本网段。",
+      "hints": [
+        "先 dhcp enable 开服务，再 ip pool 建池，network 和 gateway-list 是必配项。",
+        "dhcp enable 后 ip pool pool10，network 192.168.10.0 mask 255.255.255.0，gateway-list 192.168.10.1。",
+        "system-view\ndhcp enable\nip pool pool10\nnetwork 192.168.10.0 mask 255.255.255.0\ngateway-list 192.168.10.1\ndns-list 114.114.114.114\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip pool name pool10",
+          "expect": "192.168.10.0"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "dhcp enable",
+          "ip pool pool10",
+          "network 192.168.10.0 mask 255.255.255.0",
+          "gateway-list 192.168.10.1",
+          "dns-list 114.114.114.114",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "AR1指定服务器接口",
+      "brief": "AR1 的 GE0/0/0 上指定 DHCP 服务器工作方式为 global。",
+      "why": "全局地址池必须用 dhcp select global 绑定到接口，否则服务器收到请求也不知道用哪个池。",
+      "hints": [
+        "进 GE0/0/0 接口视图，用 dhcp select 指定工作模式。",
+        "interface GigabitEthernet0/0/0 下敲 dhcp select global。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndhcp select global\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/0",
+          "expect": "dhcp select global"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "dhcp select global",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "AR2开DHCP并配中继",
+      "brief": "AR2 全局开启 DHCP，在 PC 网关接口 GE0/0/0 上指定服务器地址 10.0.12.1。",
+      "why": "中继要配在收到广播的网关接口上，dhcp relay 会把广播转成单播发给服务器，这是中继的核心动作。",
+      "hints": [
+        "先 dhcp enable，再进网关接口用 dhcp relay server-ip 指服务器。",
+        "dhcp enable 后 interface GigabitEthernet0/0/0，dhcp select relay，dhcp relay server-ip 10.0.12.1。",
+        "system-view\ndhcp enable\ninterface GigabitEthernet0/0/0\ndhcp select relay\ndhcp relay server-ip 10.0.12.1\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/0",
+          "expect": "dhcp relay server-ip 10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "dhcp enable",
+          "interface GigabitEthernet0/0/0",
+          "dhcp select relay",
+          "dhcp relay server-ip 10.0.12.1",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "PC侧发起DHCP获取",
+      "brief": "在 PC1 上把 IPv4 配置方式设为 DHCP，点应用后查看获取到的地址。",
+      "why": "PC 是客户端，必须主动发 DHCP Discover，中继和服务器才有活干，这一步是联调触发点。",
+      "hints": [
+        "双击 PC1 打开配置页，IPv4 配置选 DHCP 再点应用。",
+        "在 PC1 的 IPv4 配置里选 DHCP，应用后看信息栏的 IP 地址。",
+        "PC1 图形界面：IPv4 配置 -> DHCP -> 应用，随后在命令行信息里能看到获取到的 192.168.10.x 地址。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip pool name pool10 used",
+          "expect": "192.168.10"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip pool name pool10 used"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "从AR2验证PC地址可达",
+      "brief": "从 AR2 ping PC 拿到的地址，确认地址真的下发且二层可达。",
+      "why": "地址池里有 used 记录不代表 PC 真配上了，从网关 ping 通才算端到端打通。",
+      "hints": [
+        "先看 AR1 地址池里 used 的地址，再在 AR2 上 ping 那个地址。",
+        "display ip pool name pool10 used 看地址，然后 ping -c 4 192.168.10.254。",
+        "AR1：\ndisplay ip pool name pool10 used\n\nAR2：\nping -c 4 192.168.10.254"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "ping -c 4 192.168.10.254",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "ping -c 4 192.168.10.254"
+        ]
+      }
+    }
+  ],
+  "id": "dhcp-relay",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "AR1 做 DHCP 服务器给 192.168.10.0/24 分地址，AR2 做 DHCP 中继，PC 能拿到地址",
+  "syllabus": [
+    "HCIA-Datacom 5.1 DHCP",
+    "HCIP-Datacom 网络服务与管理"
+  ]
+}

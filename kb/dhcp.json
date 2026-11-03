@@ -1,0 +1,44 @@
+{
+  "id": "dhcp",
+  "title": "DHCP 报文交互与中继原理",
+  "level": "HCIA",
+  "cat": "路由",
+  "keys": [
+    "DHCP",
+    "动态主机配置协议",
+    "DHCP Relay",
+    "DHCP中继",
+    "DORA"
+  ],
+  "one": "DHCP 用 DORA 四步交互自动分配 IP 地址，中继解决跨网段分配问题。",
+  "analogy": "DHCP 就像你去酒店前台办入住：你说“我要个房间”（Discover），前台说“有，给你 302 这间”（Offer），你确认“好，我住”（Request），前台登记“302 已入住”（Ack）。中继就像你住的是分店，分店没房，前台帮你打电话问总店要房，总店把房号告诉分店，分店再转给你。",
+  "body": "## 为什么需要 DHCP\n\n手工配置 IP 地址在主机数量大、移动频繁的场景下不可维护：容易冲突、容易配错网关/DNS、换网段要重配。DHCP（Dynamic Host Configuration Protocol）用客户端/服务器模型自动下发 IP 地址、掩码、网关、DNS、租期等参数，并管理地址的分配与回收。\n\nDHCP 基于 UDP：客户端用 68 端口，服务器用 67 端口。\n\n## 报文类型\n\n| 报文 | 方向 | 作用 |\n|------|------|------|\n| DHCP Discover | Client → Server | 广播寻找 DHCP 服务器 |\n| DHCP Offer | Server → Client | 服务器提供地址参数 |\n| DHCP Request | Client → Server | 客户端请求/确认使用某地址 |\n| DHCP Ack | Server → Client | 服务器确认分配 |\n| DHCP Nak | Server → Client | 服务器拒绝请求（地址不可用） |\n| DHCP Decline | Client → Server | 客户端检测到地址冲突，拒绝使用 |\n| DHCP Release | Client → Server | 客户端主动释放地址 |\n| DHCP Inform | Client → Server | 客户端已有地址，仅请求其他配置 |\n\n## DORA 交互过程\n\n1. **Discover**：客户端无地址，以 0.0.0.0 为源、255.255.255.255 为目的广播 Discover，携带客户端 MAC（chaddr）和可选参数请求列表。\n2. **Offer**：服务器从地址池选一个可用地址，构造 Offer 单播或广播（取决于 flag 字段和客户端能力），携带 yiaddr（分配给客户端的 IP）、服务器标识（Option 54）、租期（Option 51）等。\n3. **Request**：客户端可能收到多个 Offer，选择其中一个，广播 Request 告知所有服务器它选中的服务器标识和请求的 IP（Option 50）。广播的目的是让未选中的服务器回收其预分配的地址。\n4. **Ack**：被选中的服务器回复 Ack，包含完整配置参数（网关 Option 3、DNS Option 6、租期等），客户端开始使用该地址。\n\n> 注意：Request 在续租、重启等场景也用于单播请求，不一定是广播。\n\n## 地址分配方式\n\n- **手工分配**：管理员静态绑定 MAC 与 IP，通过配置下发。\n- **自动分配**：分配后永久使用（租期无限）。\n- **动态分配**：分配后带租期，到期回收。最常用。\n\n## 租期与续租\n\n租期由服务器通过 Option 51 下发。客户端在租期达到 50%（T1）时发送单播 DHCP Request 续租；若失败，在 87.5%（T2）时广播 Request 向任意服务器续租；租期到期仍未续租则释放地址。\n\n## 中继原理\n\nDHCP Discover 是广播，路由器默认不转发广播，因此客户端与服务器不在同一广播域时无法直接交互。DHCP Relay（中继）解决该问题：\n\n1. 中继设备（通常是网关路由器/三层交换机）在客户端所在接口启用 DHCP Relay，并指定服务器 IP。\n2. 收到客户端的广播 DHCP 报文后，中继将其改为单播，源 IP 改为中继接口地址（或指定源），目的 IP 为服务器地址，并在报文中插入 **Option 82**（Relay Agent Information），携带 Circuit ID（入接口信息）和 Remote ID（设备标识），供服务器选择地址池和防攻击。\n3. 服务器根据 Option 82 或 giaddr 字段（中继接口 IP）选择对应网段的地址池，回复单播报文给中继。\n4. 中继将回复报文转发给客户端（根据报文中 yiaddr 和 chaddr 或广播）。\n\n关键字段：**giaddr**（Gateway IP Address）由中继填写，服务器用它判断客户端所在网段；若 giaddr 为 0，服务器用收到报文的接口地址选池。\n\n## 设计取舍\n\n- 广播交互简单但依赖二层广播域，中继用单播+Option 82 扩展了跨网段能力，代价是需要在网关设备上配置并维护 Option 82 策略。\n- 租期短则地址回收快、适合移动场景，但续租报文多；租期长则稳定但地址利用率低。\n- 中继不修改客户端 MAC，服务器仍以 chaddr 识别客户端，因此中继对客户端透明。\n\n## 与相关技术分工\n\n- **DHCP Snooping**：交换机安全特性，监听 DHCP 报文建立绑定表，过滤非法服务器和伪造报文，常与 Option 82 配合。\n- **PPPoE**：拨号场景用 PPP 协商地址，与 DHCP 不同。\n- **ARP**：DHCP 分配地址后，客户端用 ARP 检测冲突（发送免费 ARP），冲突时发 Decline。",
+  "cmds": [
+    "display dhcp server ip-in-use",
+    "display dhcp server pool",
+    "display dhcp relay statistics",
+    "display dhcp snooping user-bind all"
+  ],
+  "pits": [
+    "中继接口未配 giaddr 或服务器选池错误，导致分配错网段地址",
+    "Option 82 策略不匹配，服务器丢弃报文",
+    "DHCP Snooping 信任端口未配，合法服务器报文被丢弃",
+    "地址池耗尽或租期过长，新客户端拿不到地址",
+    "中继与服务器间路由不可达或 ACL 拦截 UDP 67/68"
+  ],
+  "qa": [
+    {
+      "q": "DHCP 中继如何让服务器知道客户端所在网段？",
+      "a": "中继在转发报文时把 giaddr 字段填为自己面向客户端的接口 IP，服务器根据 giaddr 选择对应网段的地址池；也可通过 Option 82 携带更细的接入信息。"
+    },
+    {
+      "q": "DHCP 客户端续租在什么时间点发起？",
+      "a": "租期达到 50%（T1）时单播发送 Request 续租；失败则在 87.5%（T2）时广播 Request 向任意服务器续租；到期未续租则释放地址。"
+    },
+    {
+      "q": "DHCP Request 为什么有时广播有时单播？",
+      "a": "首次选择服务器时广播，告知所有服务器自己选中的是哪个，让未选中的回收预分配地址；续租时已知服务器地址，可单播以减少广播。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 3.2"
+}

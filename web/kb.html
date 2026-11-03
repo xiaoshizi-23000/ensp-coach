@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原理库 · 网络实验陪练</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body{overflow:hidden}
+  .kbh{display:flex;align-items:center;gap:14px;padding:12px 22px;border-bottom:1px solid var(--line);
+    background:var(--panel);position:sticky;top:0;z-index:5}
+  .kbh a.back{font-size:12.5px;color:var(--dim);text-decoration:none;padding:4px 10px;
+    border:1px solid var(--line);border-radius:14px}
+  .kbh a.back:hover{color:var(--text);border-color:var(--accent-bd)}
+  .kbh h1{margin:0;font-size:15px;font-weight:600}
+  .kbh .cnt{font-size:11px;color:var(--faint);border:1px solid var(--line);border-radius:10px;padding:0 6px}
+  .kbh .sp{flex:1}
+  #q{width:300px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    color:var(--text);padding:7px 12px;font:inherit;font-size:12.8px;outline:none}
+  #q:focus{border-color:var(--accent-bd);width:340px}
+  .kbm{display:grid;grid-template-columns:320px minmax(0,1fr);height:calc(100vh - 55px)}
+  .kbs{border-right:1px solid var(--line);padding:14px;display:flex;flex-direction:column;
+    gap:10px;min-height:0;background:var(--panel)}
+  .kba{overflow-y:auto;padding:28px 46px 80px;max-width:900px;margin:0 auto;width:100%}
+  .add{display:flex;gap:6px;flex-wrap:wrap}
+  .add input{flex:1;min-width:120px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;color:var(--text);padding:6px 9px;font:inherit;font-size:12px;outline:none}
+  .add input:focus{border-color:var(--accent-bd)}
+  .add select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+    color:var(--dim);padding:6px 4px;font-size:11.5px}
+  .add button{background:var(--accent-bg);border:1px solid var(--accent-bd);color:var(--accent-fg);
+    border-radius:7px;padding:6px 11px;font-size:12px}
+  .kbs .list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-top:2px}
+  .kbh-empty{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0}
+</style>
+</head>
+<body>
+<div class="kbh">
+  <a class="back" href="/">← 回实验台</a>
+  <a class="back" href="/help">使用手册</a>
+  <h1>原理库</h1>
+  <span class="cnt" id="cnt">0</span>
+  <span class="sp"></span>
+  <input id="q" placeholder="搜知识点，按 / 聚焦">
+  <button id="theme" class="x theme-btn" title="切换主题"><span class="brand brand-apple"><img src="assets/apple.png" alt=""></span><span class="brand brand-huawei"><img src="assets/huawei.svg" alt=""></span></button>
+</div>
+
+<div class="kbm">
+  <aside class="kbs">
+    <div class="add">
+      <input id="newTitle" placeholder="新增知识点，例如 QinQ 双层 VLAN">
+      <select id="newLevel"><option>HCIA</option><option>HCIP</option><option>HCIE</option></select>
+      <select id="newCat">
+        <option>交换</option><option>路由</option><option>安全</option><option>高可用</option>
+        <option>广域</option><option>IPv6</option><option>自动化</option>
+      </select>
+      <button id="newGo">入库</button>
+    </div>
+    <div class="kb-cats" id="cats"></div>
+    <div class="list" id="list"></div>
+  </aside>
+  <article class="kba" id="art"><div class="kb-empty">左边选一条，或直接搜</div></article>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+let cat = new URLSearchParams(location.search).get("cat") || "";
+let want = new URLSearchParams(location.search).get("id") || "";
+let items = [];
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+setTheme(localStorage.getItem("theme") || "apple");
+$("#theme").onclick = () => setTheme(document.documentElement.dataset.theme === "apple" ? "huawei" : "apple");
+
+async function api(p, b) {
+  const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
+  return (await fetch(p, o)).json();
+}
+
+function md(md) {
+  const e = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  let t = e(String(md || ""));
+  t = t.replace(/^#{1,3}\s+(.+)$/gm, "<h3>$1</h3>");
+  t = t.replace(/^#{4,5}\s+(.+)$/gm, "<h4>$1</h4>");
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+  return t.split(/\n{2,}/).map((blk) => {
+    const lines = blk.split("\n").filter((x) => x.trim());
+    if (!lines.length) return "";
+    if (lines.every((x) => /^[-*]\s+/.test(x)))
+      return "<ul>" + lines.map((x) => "<li>" + x.replace(/^[-*]\s+/, "") + "</li>").join("") + "</ul>";
+    if (/^<h[34]>/.test(lines[0])) return lines.join("");
+    return "<p>" + lines.join("<br>") + "</p>";
+  }).join("");
+}
+
+function renderCats(cats) {
+  const box = $("#cats");
+  box.innerHTML = "";
+  [""].concat(cats).forEach((c) => {
+    const b = el("button", c === cat ? "on" : "", c || "全部");
+    b.onclick = () => { cat = c; load(); };
+    box.appendChild(b);
+  });
+}
+
+async function load() {
+  const r = await api(`/api/kb?q=${encodeURIComponent($("#q").value.trim())}&cat=${encodeURIComponent(cat)}`);
+  if (!r.ok) return;
+  items = r.items || [];
+  renderCats(r.cats || []);
+  $("#cnt").textContent = items.length;
+  const box = $("#list");
+  box.innerHTML = "";
+  if (!items.length) {
+    box.appendChild(el("div", "kbh-empty", "没搜到，换个词"));
+    return;
+  }
+  items.forEach((it) => {
+    const d = el("div", "kb-item");
+    const b = document.createElement("b");
+    b.appendChild(document.createTextNode(it.title || ""));
+    b.appendChild(el("span", "kb-lv " + (it.level || ""), it.level || ""));
+    d.appendChild(b);
+    d.appendChild(el("span", null, it.one || ""));
+    d.onclick = () => openItem(it.id, d);
+    box.appendChild(d);
+    if (want && it.id === want) setTimeout(() => openItem(it.id, d), 30);
+  });
+  if (!want && items[0]) openItem(items[0].id, box.firstChild);
+  want = "";
+}
+
+async function openItem(id, node) {
+  document.querySelectorAll(".kb-item.on").forEach((x) => x.classList.remove("on"));
+  if (node) node.classList.add("on");
+  const d = await api("/api/kb/" + id);
+  if (!d || d.ok === false) return;
+  const box = $("#art");
+  box.innerHTML = "";
+  const h = el("h2", "kb-h1");
+  h.appendChild(document.createTextNode(d.title || ""));
+  h.appendChild(el("span", "kb-lv " + (d.level || ""), d.level || ""));
+  if (d.cat) h.appendChild(el("span", "kb-lv", d.cat));
+  if (d.syllabus) h.appendChild(el("span", "kb-lv", d.syllabus));
+  box.appendChild(h);
+  if (d.one) box.appendChild(el("div", "kb-one", d.one));
+  if (d.analogy) box.appendChild(el("div", "kb-analogy", d.analogy));
+  const body = el("div", "kb-md");
+  body.innerHTML = md(d.body);
+  box.appendChild(body);
+  if ((d.cmds || []).length) {
+    const s = el("div", "kb-sec");
+    s.appendChild(el("h5", null, "常用命令"));
+    const w = el("div", "kb-cmds");
+    d.cmds.forEach((c) => w.appendChild(el("code", null, c)));
+    s.appendChild(w); box.appendChild(s);
+  }
+  if ((d.pits || []).length) {
+    const s = el("div", "kb-sec");
+    s.appendChild(el("h5", null, "容易踩的坑"));
+    d.pits.forEach((p) => {
+      const row = el("div", "kb-pit");
+      row.appendChild(el("i", null, "·"));
+      row.appendChild(el("span", null, p));
+      s.appendChild(row);
+    });
+    box.appendChild(s);
+  }
+  if ((d.qa || []).length) {
+    const s = el("div", "kb-sec");
+    s.appendChild(el("h5", null, "常问"));
+    d.qa.forEach((q) => {
+      const row = el("div", "kb-qa");
+      row.appendChild(el("b", null, q.q || ""));
+      row.appendChild(el("span", null, q.a || ""));
+      s.appendChild(row);
+    });
+    box.appendChild(s);
+  }
+  box.scrollTop = 0;
+  history.replaceState(null, "", `/kb?id=${id}${cat ? "&cat=" + encodeURIComponent(cat) : ""}`);
+}
+
+let timer = null;
+$("#q").addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(load, 250);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
+  if (e.key === "Escape") { $("#q").value = ""; $("#q").blur(); load(); }
+});
+
+$("#newGo").onclick = async () => {
+  const t = ($("#newTitle").value || "").trim();
+  if (t.length < 2) return;
+  const btn = $("#newGo");
+  btn.disabled = true; btn.textContent = "生成中";
+  const r = await api("/api/kb/add", { title: t, level: $("#newLevel").value, cat: $("#newCat").value });
+  btn.disabled = false; btn.textContent = "入库";
+  if (!r.ok) { alert(r.error || "失败"); return; }
+  $("#newTitle").value = "";
+  $("#q").value = "";
+  cat = "";
+  await load();
+  openItem(r.id);
+};
+
+load();
+</script>
+</body>
+</html>

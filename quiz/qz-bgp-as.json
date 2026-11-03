@@ -1,0 +1,44 @@
+{
+  "title": "eBGP 邻居 Idle",
+  "level": "HCIP",
+  "cat": "路由",
+  "symptom": "两台路由器直连地址能 ping 通，但 eBGP 邻居状态一直停在 Idle，无法建立连接。",
+  "topology": "flowchart LR\n  R1[R1 AR2220] --- R2[R2 AR2220]\n  R1 --- SW1[SW1 S5700]\n  R2 --- SW1",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display bgp peer",
+      "output": "BGP local router ID : 10.1.1.1\nLocal AS number : 65001\nTotal number of peers : 1\nPeer            AS      State        Up/Down       PrefRcv\n10.1.1.2        65002   Idle         00:00:00      0"
+    },
+    {
+      "dev": "R2",
+      "cmd": "display bgp peer",
+      "output": "BGP local router ID : 10.1.1.2\nLocal AS number : 65002\nTotal number of peers : 1\nPeer            AS      State        Up/Down       PrefRcv\n10.1.1.1        65001   Idle         00:00:00      0"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display current-configuration | include bgp",
+      "output": "bgp 65001\n peer 10.1.1.2 as-number 65003"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 的 BGP 邻居配置的 AS 号与 R2 实际 AS 号不一致",
+      "ok": true
+    },
+    {
+      "label": "R1 和 R2 之间的直连链路故障",
+      "ok": false
+    },
+    {
+      "label": "R1 没有配置 BGP 路由更新策略",
+      "ok": false
+    },
+    {
+      "label": "R2 的 BGP 进程没有启动",
+      "ok": false
+    }
+  ],
+  "explain": "R1 上 peer 10.1.1.2 as-number 65003，而 R2 实际 AS 为 65002，AS 号不匹配导致邻居无法建立。用 display current-configuration | include bgp 查看双方 AS 配置即可确认。",
+  "id": "qz-bgp-as"
+}

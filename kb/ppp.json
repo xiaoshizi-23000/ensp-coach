@@ -1,0 +1,53 @@
+{
+  "id": "ppp",
+  "title": "PPP 与 PPPoE 原理及认证",
+  "level": "HCIA",
+  "cat": "广域",
+  "keys": [
+    "PPP",
+    "PPPoE",
+    "LCP",
+    "PAP",
+    "CHAP",
+    "NCP",
+    "IPCP",
+    "PPP协商",
+    "宽带拨号"
+  ],
+  "one": "点对点链路封装协议，负责链路建立、认证与网络层参数协商。",
+  "analogy": "PPP 就像两个人打电话前先对暗号：先确认线路通不通（LCP），再互相核对身份（PAP/CHAP 认证），最后商量用什么语言说话、说多快（NCP 协商 IP 地址等参数）。PPPoE 则是在这条电话线上再套一层\"以太网信封\"，让运营商能用交换机把成千上万个用户拨号会话集中管理，就像把每家每户的电话线都接到同一个总机上，靠会话 ID 区分谁是谁。",
+  "body": "## 为什么需要 PPP\n\n早期广域网链路（串口、拨号、SDH 上的 POS）大多是点对点拓扑，两端之间没有以太网那样的 MAC 寻址和共享介质。IP 本身是无连接、不负责链路管理的协议，它假设下层链路已经\"能用\"。于是需要一个链路层协议来回答三个问题：链路能不能通、对端是不是合法用户、网络层参数怎么配。PPP（Point-to-Point Protocol，RFC 1661）就是为此设计的通用点对点链路封装，取代了早期各厂商私有的 SLIP、HDLC 扩展等方案。\n\nPPP 的设计哲学是\"分层协商、可扩展\"：链路层控制、认证、网络层控制各自独立成协议族，通过 Protocol 字段区分，新增一种网络层协议只需增加一个 NCP，不用改 PPP 本身。\n\n## PPP 帧格式\n\nPPP 帧在 HDLC-like 成帧之上：\n\n| 字段 | 长度 | 说明 |\n|---|---|---|\n| Flag | 1 字节 | 0x7E，帧定界 |\n| Address | 1 字节 | 固定 0xFF（PPP 是点对点，地址无意义） |\n| Control | 1 字节 | 固定 0x03（无序号帧） |\n| Protocol | 1~2 字节 | 标识载荷类型，如 0xC021=LCP、0xC023=PAP、0xC223=CHAP、0x8021=IPCP、0x0021=IPv4 |\n| Information | 可变 | 载荷，默认最大 1500 字节（MRU） |\n| FCS | 2 或 4 字节 | 帧校验 |\n\nAddress 和 Control 字段在协商成功后可被压缩（ACFC，Address-and-Control-Field-Compression），Protocol 字段可压缩为 1 字节（PFC），这是为了在低速链路上省开销。\n\n## 三个阶段：LCP → 认证 → NCP\n\nPPP 链路建立是一个严格的状态机过程，顺序不能颠倒。\n\n### 1. LCP（Link Control Protocol）\n\nLCP 负责链路层参数的协商与链路质量维护，报文类型分三类：\n\n- **链路配置报文**：Configure-Request / Configure-Ack / Configure-Nak / Configure-Reject。双方各自发 Configure-Request，列出自己希望协商的选项（MRU、认证方式、魔术字 Magic Number、ACFC/PFC 压缩、回拨等），对端逐项回应。Ack 表示全部接受，Nak 表示值不可接受但选项可识别（回带建议值），Reject 表示选项不认识（回带该选项，发起方下次不再带）。\n- **链路终止报文**：Terminate-Request / Terminate-Ack。\n- **链路维护报文**：Code-Reject、Protocol-Reject、Echo-Request / Echo-Reply、Discard-Request。Echo 用于链路保活检测（类似 keepalive）。\n\nLCP 状态机核心状态包括 Initial、Starting、Closed、Stopped、Closing、Stopping、Req-Sent、Ack-Rcvd、Ack-Sent、Opened。只有进入 Opened 才允许进入认证阶段。\n\n### 2. 认证阶段（可选）\n\n认证方式由 LCP Configure-Request 中的 Authentication-Protocol 选项协商决定，常见两种：\n\n**PAP（Password Authentication Protocol，0xC023）**\n\n- 两次握手：被认证方发送 Authenticate-Request（含用户名、密码明文），认证方回 Authenticate-Ack 或 Authenticate-Nak。\n- 密码在链路上明文传输，可被嗅探，且不防重放。只在链路本身可信（如专线）或兼容老设备时使用。\n\n**CHAP（Challenge Handshake Authentication Protocol，0xC223）**\n\n- 三次握手：认证方发 Challenge（含随机数 + 名字），被认证方用 MD5(随机数 + 密码 + 可选挑战名) 算出 Response 回送，认证方本地同样计算并比对，回 Success 或 Failure。\n- 密码不上链路，且每次挑战随机数不同，能防重放。\n- CHAP 还分单向和双向：双向认证时双方都作为认证方发 Challenge，常用于运营商与用户互验。\n- 注意 CHAP 的 MD5 计算中，挑战报文里的 Name 字段是否参与计算取决于实现，华为设备默认参与，对接第三方设备时要确认。\n\n认证失败则链路直接进入 Terminate，不会进入 NCP 阶段。\n\n### 3. NCP 阶段\n\n认证通过后，针对每种网络层协议启动对应的 NCP。IPv4 用 IPCP（0x8021），协商内容包括：\n\n- **IP-Address**：双方 IP 地址。拨号场景下通常一端（运营商侧）给对端分配地址，用 Configure-Nak 回带建议地址。\n- **IP-Compression-Protocol**：头压缩，如 VJ 压缩，现代链路基本不用。\n- **Primary/Secondary DNS Server**：运营商下发 DNS。\n\nIPCP 协商完成后，链路才真正可以承载 IP 报文。IPv6 对应 IPV6CP，只协商 Interface-Identifier，地址靠 SLAAC/DHCPv6 获取。\n\n## PPPoE：把 PPP 搬到以太网上\n\n### 为什么需要 PPPoE\n\n以太网是共享介质、多播可达的，天然没有\"点对点\"概念，也没有认证机制。而运营商宽带接入需要：按用户认证计费、动态分配地址、限制每用户会话。PPP 恰好提供了认证和地址协商，但它是为点对点链路设计的。PPPoE（PPP over Ethernet，RFC 2516）在以太网上模拟点对点会话：每个用户与 BRAS 之间建立一条逻辑 PPP 会话，用 Session ID 区分，从而在共享以太网上实现\"每人一条虚拟专线\"。\n\n### 两个阶段\n\n**Discovery 阶段（无 Session ID）**\n\n以太网类型 0x8863，报文类型：\n\n- PADI（PPPoE Active Discovery Initiation）：客户端广播，寻找 BRAS。目的 MAC 为广播。\n- PADO（Offer）：BRAS 单播回应，携带自己的 MAC 和可提供的服务名。\n- PADR（Request）：客户端选定一个 BRAS，单播请求会话。\n- PADS（Session-confirmation）：BRAS 分配 Session ID，会话建立。\n- PADT（Terminate）：任一方可发，终止会话。\n\n**Session 阶段**\n\n以太网类型 0x8864，载荷就是完整的 PPP 帧（从 Protocol 字段开始，不含 Flag/Address/Control/FCS）。此时 PPP 的 LCP、认证、NCP 流程照常进行，只是承载在以太网之上。\n\n### PPPoE 报文格式要点\n\nSession 阶段报文：以太网头（目的 MAC 为对端单播 MAC） + PPPoE 头（Version/Type、Code=0x00、Session ID、Length） + PPP 帧。MTU 因此比普通以太网少 8 字节（PPPoE 头），实际可用 MRU 通常协商为 1492，这是 PPPoE 环境经典的 MSS/MTU 问题来源。\n\n### 与 BRAS 的配合\n\nBRAS（Broadband Remote Access Server）终结大量 PPPoE 会话，配合 RADIUS 做认证授权计费，配合 DHCP/地址池做地址分配。一个 BRAS 上可同时存在数万会话，Session ID 是区分会话的关键。\n\n## 设计取舍\n\n- **为什么认证放在 LCP 之后、NCP 之前**：先确认链路可用再验身份，避免在坏链路上做无谓认证；认证通过才分配网络层资源，防止未授权用户占用地址池。\n- **为什么 CHAP 用挑战-响应而非直接传密码**：链路可能经过不可信中间设备，明文密码风险高；随机挑战保证每次响应不同，防重放。\n- **为什么 PPPoE 不直接用 IPoE**：IPoE 依赖 DHCP Option 和 Web 认证，会话管理和计费粒度不如 PPPoE 精细；但 PPPoE 有封装开销和 MTU 问题，高带宽场景下 IPoE 逐渐增多。\n- **为什么 PPP 有 Magic Number**：用于检测环路（收到自己的魔术字说明链路成环），在串口背靠背或误接时能发现问题。",
+  "cmds": [
+    "display interface Serial1/0/0",
+    "display ppp interface Serial1/0/0",
+    "debugging ppp lcp all",
+    "debugging ppp chap all",
+    "display pppoe-server session all"
+  ],
+  "pits": [
+    "PPPoE 环境 MTU 常为 1492，需同步调整 TCP MSS，否则大包不通",
+    "CHAP 对接第三方设备时确认挑战 Name 是否参与 MD5 计算",
+    "PAP 密码明文传输，公网链路务必用 CHAP",
+    "LCP 协商失败先查 MRU、认证方式、魔术字是否匹配",
+    "PPPoE 会话建立后仍不通，检查 IPCP 是否拿到地址和 DNS"
+  ],
+  "qa": [
+    {
+      "q": "PPP 建立过程分哪几个阶段？",
+      "a": "LCP 协商（链路层参数）→ 认证（PAP/CHAP，可选）→ NCP 协商（如 IPCP 分配 IP）。顺序固定，认证失败则链路终止。"
+    },
+    {
+      "q": "CHAP 与 PAP 的核心区别？",
+      "a": "PAP 两次握手、密码明文；CHAP 三次握手、挑战随机数 + MD5 摘要，密码不上链路且防重放。"
+    },
+    {
+      "q": "PPPoE 两个阶段分别做什么？",
+      "a": "Discovery 阶段用 PADI/PADO/PADR/PADS 发现 BRAS 并分配 Session ID；Session 阶段承载 PPP 帧，进行 LCP、认证、NCP。"
+    },
+    {
+      "q": "PPPoE 为什么 MTU 是 1492？",
+      "a": "以太网 MTU 1500 减去 PPPoE 头 8 字节（6 字节头 + 2 字节 Length 相关开销），实际可用载荷 1492。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 广域网技术（PPP 与 PPPoE 原理及认证）"
+}

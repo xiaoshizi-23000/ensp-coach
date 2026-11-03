@@ -1,0 +1,45 @@
+{
+  "id": "aaa",
+  "title": "AAA 认证授权计费原理",
+  "level": "HCIA",
+  "cat": "安全",
+  "keys": [
+    "AAA",
+    "Authentication Authorization Accounting",
+    "RADIUS",
+    "HWTACACS",
+    "认证授权计费"
+  ],
+  "one": "对用户做身份认证、权限授权和操作计费的统一安全框架",
+  "analogy": "AAA 就像进公司大楼的一套流程：门口保安核对工牌确认你是谁（认证），前台根据你的部门发给你能开哪几扇门的门禁卡（授权），你每刷一次门、用一次会议室都记在物业账单上（计费）。三件事分开做，是因为“证明你是谁”“你能干什么”“你干了多少”本来就是三个问题，混在一起既管不清也查不明。",
+  "body": "## 为什么需要 AAA\n\n网络设备要回答三个独立的问题：进来的这个人是谁？他能做什么？他做了多少、该记什么账？如果只做认证不做授权，任何通过认证的人都能拿到最高权限；如果只做授权不做计费，出了问题无法追溯。AAA 把这三件事拆成三个可独立部署、独立扩展的功能面，认证可以对接 AD/LDAP，授权可以按用户组下发属性，计费可以对接审计系统，各自演进互不牵制。\n\n在华为设备上，AAA 是一个框架，真正干活的是它下面的**认证方案（authentication-scheme）**、**授权方案（authorization-scheme）**、**计费方案（accounting-scheme）**，再通过**域（domain）**把三者绑定起来，用户接入时按域名匹配到对应的一套方案。\n\n## 三个 A 各自做什么\n\n### Authentication 认证\n\n解决“你是谁”。设备支持多种认证方式：\n\n- **本地认证**：用户名密码存在设备 `local-user` 表里，适合小规模、设备管理登录。\n- **远端认证**：把凭据转发给 RADIUS 或 HWTACACS 服务器校验，适合大规模、集中管理。\n- **不认证**：某些场景（如免认证 Portal 页面）直接放行，风险高，慎用。\n\n认证结果只有成功/失败，失败后按方案配置的 `retry` 次数重试，超时后可以 fallback 到本地认证（`authentication-mode radius local` 这种顺序写法就是 fallback 链）。\n\n### Authorization 授权\n\n解决“你能干什么”。认证通过后，服务器或本地配置下发授权属性，决定用户能访问哪些资源、拿到什么权限级别。典型属性包括：\n\n- **用户级别（privilege level）**：0–15，决定能敲哪些命令。\n- **VLAN / ACL / 带宽 / IP 地址池**：在 802.1X、Portal 接入中由 RADIUS 通过标准属性（如 Filter-Id、Framed-IP-Address）或华为私有属性下发。\n- **命令授权**：HWTACACS 支持逐条命令授权，RADIUS 不支持。\n\n授权可以在认证过程中一并完成（RADIUS Access-Accept 报文里带属性），也可以单独发起（HWTACACS 的授权流程独立）。\n\n### Accounting 计费\n\n解决“你用了多少”。计费不是收钱，而是记录会话的开始、结束、时长、流量。关键机制是**计费开始（Start）**和**计费结束（Stop）**报文，中间可以按周期发**实时计费（Interim-Update）**。设备侧维护计费会话，用户下线或设备重启时补发 Stop，避免账目悬空。\n\n## RADIUS 与 HWTACACS 的分工\n\n| 维度 | RADIUS | HWTACACS |\n|---|---|---|\n| 传输层 | UDP（1812 认证 / 1813 计费） | TCP（49） |\n| 加密范围 | 只加密密码字段 | 整个报文体加密 |\n| 认证授权 | 认证授权合一 | 认证、授权分离 |\n| 命令级授权 | 不支持 | 支持 |\n| 典型场景 | 网络接入（802.1X、Portal、PPPoE） | 设备管理登录、命令审计 |\n\n设计取舍很清楚：RADIUS 用 UDP 换轻量和通用，适合海量接入用户；HWTACACS 用 TCP 换可靠和细粒度，适合设备管理这种对命令级控制有要求的场景。\n\n## RADIUS 报文机制\n\nRADIUS 报文由 Code、Identifier、Length、Authenticator（16 字节）和 Attribute 列表组成。\n\n- **Code**：1 Access-Request、2 Access-Accept、3 Access-Reject、4 Accounting-Request、5 Accounting-Response。\n- **Identifier**：匹配请求与响应，重传时不变。\n- **Authenticator**：Request Authenticator 是随机数；Response Authenticator 由 MD5(Code+ID+Length+RequestAuth+Attributes+Secret) 计算，用于防篡改和防伪造。\n- **共享密钥（shared secret）**：设备与服务器之间预共享，密码字段用 MD5 异或加密，密钥泄露等于认证体系失守。\n\n计费报文里 Start/Stop/Interim-Update 由 **Acct-Status-Type** 属性区分，会话用 **Acct-Session-Id** 唯一标识，Stop 报文带 **Acct-Session-Time** 和输入输出字节数。\n\n## 域与方案绑定\n\n用户接入时携带用户名，设备按 `user@domain` 或接入接口绑定的域匹配到 domain，domain 下引用 authentication-scheme、authorization-scheme、accounting-scheme 和 RADIUS/HWTACACS 服务器模板。这是华为 AAA 的核心组织方式：**方案可复用，域做绑定**。默认域 `default` 兜底，改默认域配置影响面很大。\n\n## 设计上的取舍\n\n- **本地 vs 远端**：本地认证无单点故障但难集中管理；远端集中但服务器挂了就全挂，所以生产上普遍配 fallback。\n- **认证授权合一 vs 分离**：合一减少交互次数、降低时延；分离让权限变更不必重新认证，适合命令级审计。\n- **计费实时性**：Interim-Update 周期越短账目越准，但服务器压力和网络开销越大，通常 5–15 分钟。\n- **安全边界**：AAA 只解决“谁能进、能干什么”，不解决传输加密，接入层还需配合 802.1X、MACsec、HTTPS 等。",
+  "cmds": [
+    "display aaa configuration",
+    "display domain name default",
+    "display radius-server configuration",
+    "display local-user",
+    "display aaa offline-record all"
+  ],
+  "pits": [
+    "共享密钥不一致会导致认证静默失败，先查密钥",
+    "默认域被改会影响所有未带域名的用户",
+    "RADIUS 计费 UDP 丢包会造成账目缺失，需开重传",
+    "本地用户密码策略不满足时认证直接拒绝",
+    "HWTACACS 与 RADIUS 服务器模板不能混用同一域"
+  ],
+  "qa": [
+    {
+      "q": "AAA 三个 A 分别解决什么问题？",
+      "a": "认证确认身份，授权决定权限和可访问资源，计费记录会话时长与流量用于审计和追溯，三者可独立部署。"
+    },
+    {
+      "q": "RADIUS 和 HWTACACS 主要区别？",
+      "a": "RADIUS 基于 UDP、认证授权合一、只加密密码；HWTACACS 基于 TCP、认证授权分离、整包加密、支持命令级授权。"
+    },
+    {
+      "q": "为什么生产环境要配本地认证 fallback？",
+      "a": "远端服务器故障时避免所有用户无法登录，保证设备可管理性，属于可用性兜底设计。"
+    }
+  ],
+  "syllabus": "HCIA-Security 安全认证与接入控制 / HCIA-Datacom 设备管理与安全"
+}

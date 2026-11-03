@@ -1,0 +1,326 @@
+{
+  "title": "Easy-IP 源 NAT 实验",
+  "subtitle": "用 Easy-IP 让内网访问外网并验证地址转换",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "NAT",
+    "Easy-IP",
+    "ACL"
+  ],
+  "intro": "企业出口路由器 AR1 用 Easy-IP 做源 NAT，把内网 192.168.10.0/24 的流量转换成公网接口地址，最终 PC1 能 ping 通外网 202.100.1.2，并在 AR1 上看到 NAT 会话。",
+  "devices": [
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 300,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 350,
+      "y": 300
+    },
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 600,
+      "y": 300
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 850,
+      "y": 300
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/2",
+      "b": "AR1",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/1",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "把两台路由器分别改名为 AR1 和 AR2，交换机改名为 SW1。",
+      "why": "机房设备多，主机名是排障时第一眼看到的信息，先改掉避免后面敲错设备。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 后敲 sysname AR1，交换机同理。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2：\nsystem-view\nsysname AR2\nreturn\n\nSW1：\nsystem-view\nsysname SW1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        },
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ],
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配 AR1 内网接口",
+      "brief": "AR1 的 GE0/0/0 配 192.168.10.1/24，作为内网网关。",
+      "why": "内网 PC 的网关必须指向这个地址，NAT 的 inside 接口也认这个口。",
+      "hints": [
+        "进接口视图配地址，别忘了加 description 标注内网侧。",
+        "interface GigabitEthernet0/0/0 然后 ip address 192.168.10.1 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-LAN\nip address 192.168.10.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-LAN",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配 AR1 外网接口",
+      "brief": "AR1 的 GE0/0/1 配 202.100.1.1/24，作为公网出口。",
+      "why": "Easy-IP 会把内网源地址转换成这个接口的地址，所以这个口必须有公网 IP。",
+      "hints": [
+        "同样进接口视图配地址，description 写 to-Internet。",
+        "interface GigabitEthernet0/0/1 然后 ip address 202.100.1.1 24。",
+        "system-view\ninterface GigabitEthernet0/0/1\ndescription to-Internet\nip address 202.100.1.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "202.100.1.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-Internet",
+          "ip address 202.100.1.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配 AR2 接口地址",
+      "brief": "AR2 的 GE0/0/0 配 202.100.1.2/24，模拟外网服务器。",
+      "why": "外网设备要和 AR1 公网口同网段，这样 AR1 才能直接 ARP 到它。",
+      "hints": [
+        "进 AR2 的 GE0/0/0 接口配地址。",
+        "interface GigabitEthernet0/0/0 然后 ip address 202.100.1.2 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR1\nip address 202.100.1.2 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "202.100.1.2"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR1",
+          "ip address 202.100.1.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "配 AR2 回程路由",
+      "brief": "AR2 加一条静态路由，把 192.168.10.0/24 指回 AR1 的 202.100.1.1。",
+      "why": "外网设备不知道内网私网地址怎么走，必须有一条回程路由，否则 ping 请求到了也回不来。",
+      "hints": [
+        "在 AR2 系统视图下加静态路由，目的网段是 192.168.10.0/24，下一跳是 AR1 的公网口。",
+        "ip route-static 192.168.10.0 24 202.100.1.1",
+        "system-view\nip route-static 192.168.10.0 24 202.100.1.1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip routing-table",
+          "expect": "192.168.10.0/24"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "ip route-static 192.168.10.0 24 202.100.1.1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "配 ACL 抓内网流量",
+      "brief": "在 AR1 上配一条基本 ACL，匹配 192.168.10.0/24 的源地址。",
+      "why": "Easy-IP 需要 ACL 告诉它哪些流量要做 NAT，不配 ACL 就不知道转换谁。",
+      "hints": [
+        "先 acl 2000 建基本 ACL，然后 rule permit source 匹配网段。",
+        "acl 2000\nrule 5 permit source 192.168.10.0 0.0.0.255",
+        "system-view\nacl 2000\nrule 5 permit source 192.168.10.0 0.0.0.255\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display acl 2000",
+          "expect": "rule 5 permit source 192.168.10.0 0.0.0.255"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "acl 2000",
+          "rule 5 permit source 192.168.10.0 0.0.0.255",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "外网口启用 Easy-IP",
+      "brief": "在 AR1 的 GE0/0/1 上执行 nat outbound 2000，启用 Easy-IP。",
+      "why": "Easy-IP 就是 nat outbound 后面不带地址池，直接借用接口地址做转换，这是出口路由器最常见的做法。",
+      "hints": [
+        "进外网接口视图，敲 nat outbound 2000 引用刚才的 ACL。",
+        "interface GigabitEthernet0/0/1\nnat outbound 2000",
+        "system-view\ninterface GigabitEthernet0/0/1\nnat outbound 2000\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/1",
+          "expect": "nat outbound 2000"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "nat outbound 2000",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "从内网 ping 外网",
+      "brief": "在 AR1 上用 192.168.10.1 作源 ping 202.100.1.2，验证 NAT 生效。",
+      "why": "从网关发起 ping 能直接验证内网到外网的连通性，PC 上没有命令行，所以从 AR1 验证。",
+      "hints": [
+        "ping 的时候用 -a 指定源地址为内网网关，这样流量才会命中 ACL 做 NAT。",
+        "ping -a 192.168.10.1 -c 4 202.100.1.2",
+        "ping -a 192.168.10.1 -c 4 202.100.1.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -a 192.168.10.1 -c 4 202.100.1.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -a 192.168.10.1 -c 4 202.100.1.2"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "查看 NAT 会话表",
+      "brief": "在 AR1 上 display nat session all，确认源地址被转换成 202.100.1.1。",
+      "why": "ping 通不代表 NAT 一定做了，必须看会话表里源地址是不是变成了公网口地址，这是验证 Easy-IP 的关键一步。",
+      "hints": [
+        "在用户视图直接敲 display nat session all，看 Source 字段。",
+        "display nat session all",
+        "display nat session all"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display nat session all",
+          "expect": "202.100.1.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display nat session all"
+        ]
+      }
+    }
+  ],
+  "id": "nat-easyip",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "企业出口路由器用 Easy-IP 做源 NAT，让内网 192.168.10.0/24 能访问外网 202.100.1.2，验证地址被转换",
+  "syllabus": [
+    "HCIA-Datacom 4.3 NAT 原理",
+    "HCIA-Datacom 4.4 NAT 应用场景"
+  ]
+}

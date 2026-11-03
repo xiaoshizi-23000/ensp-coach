@@ -1,0 +1,44 @@
+{
+  "title": "静态路由下一跳错",
+  "level": "HCIA",
+  "cat": "路由",
+  "symptom": "PC1 能 ping 通 R1、R2 之间的网段，但 ping 不通最右侧 R3 所连的 192.168.3.0/24 网段。",
+  "topology": "flowchart LR\n  PC1[PC1] --> R1[R1 AR2220]\n  R1 --> R2[R2 AR2220]\n  R2 --> R3[R3 AR2220]\n  R3 --> LAN[192.168.3.0/24]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display ip routing-table",
+      "output": "Destination/Mask    Proto   Pre  Cost      NextHop         Interface\n192.168.1.0/24      Direct  0    0         192.168.1.1     GigabitEthernet0/0/0\n192.168.2.0/24      Static  60   0         192.168.2.2     GigabitEthernet0/0/1\n192.168.3.0/24      Static  60   0         192.168.2.3     GigabitEthernet0/0/1"
+    },
+    {
+      "dev": "R2",
+      "cmd": "display ip interface brief",
+      "output": "Interface            IP Address/Mask      Physical   Protocol\nGigabitEthernet0/0/0  192.168.1.2/24       up         up\nGigabitEthernet0/0/1  192.168.2.1/24       up         up"
+    },
+    {
+      "dev": "R1",
+      "cmd": "ping -a 192.168.1.1 192.168.3.1",
+      "output": "PING 192.168.3.1: 56  data bytes, press CTRL_C to break\nRequest time out\nRequest time out\nRequest time out\nRequest time out\nRequest time out\n  --- 192.168.3.1 ping statistics ---\n    5 packet(s) transmitted\n    0 packet(s) received\n    100.00% packet loss"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 上指向 192.168.3.0/24 的静态路由下一跳写错了",
+      "ok": true
+    },
+    {
+      "label": "R2 没有配置回程路由",
+      "ok": false
+    },
+    {
+      "label": "R1 与 R2 之间链路故障",
+      "ok": false
+    },
+    {
+      "label": "R3 上缺少到 PC1 所在网段的路由",
+      "ok": false
+    }
+  ],
+  "explain": "R1 到 192.168.3.0/24 的静态路由下一跳写成 192.168.2.3，而 R2 的 G0/0/1 地址是 192.168.2.1，该下一跳不可达。用 display ip routing-table 查看下一跳，再 ping 该下一跳即可确认。",
+  "id": "qz-static-nh"
+}

@@ -1,0 +1,45 @@
+{
+  "id": "trunk",
+  "title": "Trunk 与 802.1Q 标签处理",
+  "level": "HCIA",
+  "cat": "交换",
+  "keys": [
+    "Trunk",
+    "802.1Q",
+    "VLAN Tag",
+    "干道",
+    "Tagged/Untagged",
+    "PVID"
+  ],
+  "one": "Trunk 是在一条物理链路上用 802.1Q 标签承载多个 VLAN 的干道链路。",
+  "analogy": "把交换机之间的 Trunk 链路想成一条高速公路，VLAN 就是不同颜色的货车。每辆货车车头贴一个颜色标签（802.1Q Tag），收费站（交换机）看标签决定放行到哪条出口。没有标签的默认按入口的默认颜色（PVID）处理。这样一条路就能跑多种颜色的车，不用每种颜色修一条专路。",
+  "body": "## 为什么需要 Trunk\n\n接入层交换机每个 VLAN 都要跨设备延伸到核心，如果每个 VLAN 用一条物理链路互联，端口和线缆数量会爆炸。Trunk（干道）用一条链路承载多个 VLAN，靠 **802.1Q 标签** 区分报文属于哪个 VLAN，这是二层网络扩展的基础。\n\n## 802.1Q 帧格式\n\n标准以太网帧在 SA 和 Type/Length 之间插入 4 字节 802.1Q Tag：\n\n| 字段 | 长度 | 说明 |\n|------|------|------|\n| TPID | 2 字节 | 固定 0x8100，标识这是一个 802.1Q 帧 |\n| Priority (PCP) | 3 bit | 优先级，用于 QoS |\n| DEI/CFI | 1 bit | 丢弃 eligible 指示，通常 0 |\n| VLAN ID | 12 bit | 有效范围 1–4094，0 和 4095 保留 |\n\n插入 Tag 后帧长增加 4 字节，超过 1518 的帧称为 Baby Giant，交换机需支持相应处理。\n\n## 端口链路类型与标签处理\n\n华为交换机端口链路类型主要有 Access、Trunk、Hybrid：\n\n- **Access**：只属于一个 VLAN，收方向打上 PVID 标签，发方向剥离标签，终端无感知。\n- **Trunk**：可承载多个 VLAN，收方向：带 Tag 且 VLAN 在允许列表则保留，不带 Tag 则打 PVID；发方向：VLAN 在允许列表且等于 PVID 时可配置是否剥离（默认剥离），其他允许 VLAN 带 Tag 发出。\n- **Hybrid**：更灵活，可逐 VLAN 配置 tagged/untagged，常用于交换机连接 IP 话机、AP 等场景。\n\n关键规则：**Trunk 口只允许一个 VLAN 以 Untagged 方式发出，通常就是 PVID**。因为对端收到无标签帧只能按自己的 PVID 归类，多个 untagged VLAN 会冲突。\n\n## 收发处理流程（以华为 VRP 为例）\n\n**接收方向**：\n1. 检查帧是否带 Tag。\n2. 带 Tag：检查 VLAN ID 是否在端口允许列表，是则接收并保留 Tag；否则丢弃。\n3. 不带 Tag：打上端口 PVID，若 PVID 在允许列表则接收，否则丢弃。\n\n**发送方向**：\n1. 查 MAC 表得到出端口和 VLAN。\n2. 若出端口为 Trunk 且该 VLAN 在允许列表：\n   - VLAN == PVID 且端口配置 `port trunk pvid vlan` 后默认 untagged 发出（可配 `port trunk allow-pass vlan` 控制）。\n   - 其他 VLAN 带 Tag 发出。\n3. 若 VLAN 不在允许列表，丢弃。\n\n## PVID 的作用与设计取舍\n\nPVID（Port Default VLAN ID）是端口对 **Untagged 帧** 的归属 VLAN。设计上让 Trunk 口只有一个 untagged VLAN，是为了兼容不支持 Tag 的终端和简化对端处理。代价是配置时必须保证链路两端 PVID 一致，否则无标签帧会被归到不同 VLAN，造成“能通但 VLAN 不对”的隐蔽故障。\n\n## 与 Access/Hybrid 的分工\n\n- 接终端用 Access，简单、安全，终端无法伪造 Tag。\n- 交换机互联用 Trunk，标准化、互通性好。\n- 需要同一端口对部分 VLAN 打标签、部分不打标签（如 IP 话机 + PC）用 Hybrid。\n\n## 设计取舍\n\nTrunk 用标签换端口密度，但带来：\n- 需要规划允许 VLAN 列表，避免广播泛洪到不该去的链路（`port trunk allow-pass vlan`）。\n- Native VLAN（PVID）不一致会导致 VLAN 跳变和安全隐患，建议两端一致并避免使用 VLAN 1。\n- 标签增加 4 字节，对 MTU 敏感的场景需确认设备支持。\n",
+  "cmds": [
+    "display port vlan",
+    "display vlan",
+    "display interface GigabitEthernet0/0/1",
+    "display mac-address vlan 10"
+  ],
+  "pits": [
+    "两端 PVID 不一致导致无标签帧归错 VLAN",
+    "Trunk 允许列表漏配 VLAN 导致业务不通",
+    "多个 VLAN 配成 untagged 发出造成冲突",
+    "VLAN 1 作为 Native VLAN 存在安全隐患",
+    "忘记放行管理 VLAN 导致远程登录中断"
+  ],
+  "qa": [
+    {
+      "q": "Trunk 端口收到不带标签的帧如何处理？",
+      "a": "打上端口 PVID，若 PVID 在允许列表中则接收，否则丢弃。"
+    },
+    {
+      "q": "802.1Q Tag 中 VLAN ID 多少位？有效范围？",
+      "a": "12 bit，有效范围 1–4094，0 和 4095 保留。"
+    },
+    {
+      "q": "Trunk 和 Hybrid 的主要区别？",
+      "a": "Trunk 只允许一个 untagged VLAN（PVID），Hybrid 可逐 VLAN 配置 tagged/untagged，更灵活。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 3.2 VLAN 与 Trunk"
+}

@@ -1,0 +1,326 @@
+{
+  "title": "高级ACL限制Web访问",
+  "subtitle": "用高级ACL只放行指定网段访问服务器80端口",
+  "level": "进阶",
+  "minutes": 30,
+  "tags": [
+    "ACL",
+    "高级ACL",
+    "网络安全"
+  ],
+  "intro": "在核心交换机上配置高级ACL，只允许192.168.10.0/24访问服务器192.168.20.100的80端口，其余流量全部拒绝，并绑定到接口入方向。最终让授权网段能打开网页、其他网段访问被丢弃。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 350,
+      "y": 200
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 350,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "x": 100,
+      "y": 500,
+      "ip": "192.168.30.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.30.1"
+    },
+    {
+      "name": "SRV1",
+      "model": "PC",
+      "x": 600,
+      "y": 350,
+      "ip": "192.168.20.100",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.20.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "PC2",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/2"
+    },
+    {
+      "a": "SRV1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/3"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "把交换机命名为 SW1，方便后续回显核对。",
+      "why": "机房设备多，主机名是排障时第一眼确认设备身份的依据，实验里也靠它核对回显。",
+      "hints": [
+        "你现在在用户视图，提示符是 <Huawei>，配置命令会被拒绝。",
+        "先 system-view 进系统视图，再用 sysname 改名。",
+        "system-view\nsysname SW1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "创建三个业务VLAN",
+      "brief": "在 SW1 上创建 VLAN 10、20、30，分别对应办公、服务器、访客网段。",
+      "why": "不同网段用 VLAN 隔离是现场标准做法，ACL 策略也按网段来写，VLAN 是承载网段的骨架。",
+      "hints": [
+        "VLAN 要在系统视图下批量创建。",
+        "vlan batch 10 20 30 一条命令搞定。",
+        "system-view\nvlan batch 10 20 30\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vlan",
+          "expect": "VLAN ID: 10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "vlan batch 10 20 30",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "把接入口划进VLAN",
+      "brief": "GE0/0/1 划入 VLAN 10，GE0/0/2 划入 VLAN 30，GE0/0/3 划入 VLAN 20，都配成 access。",
+      "why": "接 PC 和服务器的口是 access 口，必须显式指定 VLAN，否则流量落在默认 VLAN 1 里，后面 ACL 根本匹配不上。",
+      "hints": [
+        "每个接口进接口视图，先 port link-type access，再 port default vlan。",
+        "interface GigabitEthernet0/0/1 → port link-type access → port default vlan 10，其余口照做。",
+        "interface GigabitEthernet0/0/1\nport link-type access\nport default vlan 10\nquit\ninterface GigabitEthernet0/0/2\nport link-type access\nport default vlan 30\nquit\ninterface GigabitEthernet0/0/3\nport link-type access\nport default vlan 20\nquit"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vlan",
+          "expect": "UT:GE0/0/1(U)"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "port link-type access",
+          "port default vlan 30",
+          "quit",
+          "interface GigabitEthernet0/0/3",
+          "port link-type access",
+          "port default vlan 20",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配VLANIF网关地址",
+      "brief": "给 VLANIF 10、20、30 分别配 192.168.10.1、192.168.20.1、192.168.30.1，掩码 24。",
+      "why": "三层交换机靠 VLANIF 做网关，PC 和服务器要能跨网段访问，必须先有网关地址。",
+      "hints": [
+        "interface Vlanif 10 进三层接口视图，再 ip address 配地址。",
+        "三个 VLANIF 各配一个地址，注意网段和 PC 的网关一致。",
+        "interface Vlanif10\nip address 192.168.10.1 24\nquit\ninterface Vlanif20\nip address 192.168.20.1 24\nquit\ninterface Vlanif30\nip address 192.168.30.1 24\nquit"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.20.1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "interface Vlanif20",
+          "ip address 192.168.20.1 24",
+          "quit",
+          "interface Vlanif30",
+          "ip address 192.168.30.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "验证基础互通",
+      "brief": "从 SW1 ping 192.168.10.10 和 192.168.20.100，确认三层转发正常。",
+      "why": "ACL 是在通的基础上做限制，先确认不加策略时全通，后面被拒绝才能确定是 ACL 生效而不是路由问题。",
+      "hints": [
+        "在 SW1 用户视图直接 ping 两个地址。",
+        "ping -c 4 192.168.10.10 和 ping -c 4 192.168.20.100 各来一次。",
+        "ping -c 4 192.168.10.10\nping -c 4 192.168.20.100"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "ping -c 4 192.168.20.100",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -c 4 192.168.10.10",
+          "ping -c 4 192.168.20.100"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "写高级ACL规则",
+      "brief": "创建 ACL 3000，先放行 192.168.10.0/24 到 192.168.20.100 的 TCP 80，再拒绝所有 IP。",
+      "why": "高级 ACL 能匹配源、目的、协议和端口，比基本 ACL 精确。华为 ACL 末尾默认 permit，所以必须显式加 rule deny ip，否则等于没限制。",
+      "hints": [
+        "acl number 3000 进高级 ACL 视图，rule 后面跟 permit/deny 和协议。",
+        "放行规则用 rule permit tcp source ... destination ... destination-port eq 80，最后补 rule deny ip。",
+        "acl number 3000\nrule 5 permit tcp source 192.168.10.0 0.0.0.255 destination 192.168.20.100 0 destination-port eq 80\nrule 10 deny ip\nquit"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display acl 3000",
+          "expect": "rule 5 permit tcp"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "acl number 3000",
+          "rule 5 permit tcp source 192.168.10.0 0.0.0.255 destination 192.168.20.100 0 destination-port eq 80",
+          "rule 10 deny ip",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "ACL绑定到入方向",
+      "brief": "把 ACL 3000 应用到 VLANIF10 和 VLANIF30 的 inbound 方向。",
+      "why": "入方向在流量进入设备的第一跳就过滤，省掉后续查路由的开销，也避免策略被绕开，现场习惯绑在靠近源的三层接口入方向。",
+      "hints": [
+        "进 VLANIF 接口视图，用 traffic-filter inbound acl 3000 绑定。",
+        "VLANIF10 和 VLANIF30 都要绑，服务器侧 VLANIF20 不用绑。",
+        "interface Vlanif10\ntraffic-filter inbound acl 3000\nquit\ninterface Vlanif30\ntraffic-filter inbound acl 3000\nquit"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include traffic-filter",
+          "expect": "traffic-filter inbound acl 3000"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "traffic-filter inbound acl 3000",
+          "quit",
+          "interface Vlanif30",
+          "traffic-filter inbound acl 3000",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "验证放行与拒绝",
+      "brief": "从 SW1 模拟源地址测试：授权网段访问 80 应通，访客网段访问 80 应被丢弃。",
+      "why": "ACL 配完必须双向验证，只测通不测不通，等于没验证策略是否真的生效。",
+      "hints": [
+        "用 ping -a 指定源地址发探测包，观察丢包率。",
+        "ping -a 192.168.10.10 192.168.20.100 应通；ping -a 192.168.30.10 192.168.20.100 应丢包。",
+        "ping -a 192.168.10.10 -c 4 192.168.20.100\nping -a 192.168.30.10 -c 4 192.168.20.100"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "ping -a 192.168.30.10 -c 4 192.168.20.100",
+          "expect": "100.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -a 192.168.10.10 -c 4 192.168.20.100",
+          "ping -a 192.168.30.10 -c 4 192.168.20.100"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "查看ACL命中计数",
+      "brief": "查看 ACL 3000 各条规则的匹配计数，确认策略真的在被调用。",
+      "why": "现场排障时命中计数是判断 ACL 有没有生效、哪条规则在拦流量的直接证据，比猜靠谱。",
+      "hints": [
+        "display acl 3000 会列出每条 rule 的匹配次数。",
+        "重点看 rule 5 和 rule 10 的计数是否在增长。",
+        "display acl 3000"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display acl 3000",
+          "expect": "rule 10 deny ip"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display acl 3000"
+        ]
+      }
+    }
+  ],
+  "id": "acl-adv",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "用高级 ACL 只允许 192.168.10.0/24 访问服务器 192.168.20.100 的 80 端口，其余拒绝，绑在接口入方向",
+  "syllabus": [
+    "HCIA-Datacom 4.1 ACL 原理与配置"
+  ]
+}

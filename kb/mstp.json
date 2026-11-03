@@ -1,0 +1,45 @@
+{
+  "id": "mstp",
+  "title": "MSTP 多生成树与实例映射",
+  "level": "HCIP",
+  "cat": "交换",
+  "keys": [
+    "MSTP",
+    "多生成树",
+    "实例映射",
+    "MSTI",
+    "CIST",
+    "MST域"
+  ],
+  "one": "MSTP 通过多实例映射不同 VLAN，实现负载分担与快速收敛。",
+  "analogy": "就像一条多车道的高速公路，每个车道（实例）可以独立决定哪条路通车、哪条路封闭，而不是所有车都挤一条道。这样不同方向的车流（VLAN）可以走不同的路径，互不干扰，还能互相备份。",
+  "body": "## 为什么需要 MSTP\n\nSTP/RSTP 在整网只维护一棵生成树，所有 VLAN 共享同一拓扑，导致部分链路被阻塞、带宽浪费，且无法按 VLAN 做负载分担。MSTP（Multiple Spanning Tree Protocol，IEEE 802.1s）把多个 VLAN 映射到不同的生成树实例（MSTI），每个实例独立计算拓扑，从而实现：\n\n- **负载分担**：不同 VLAN 走不同路径，阻塞端口分散。\n- **快速收敛**：继承 RSTP 的快速收敛机制（P/A 机制、边缘端口等）。\n- **兼容性**：能兼容 STP/RSTP，通过 MSTP 的 CIST 与外部树交互。\n\n## 核心概念\n\n### MST 域（MST Region）\n\nMST 域是一组交换机逻辑上的集合，域内所有设备必须配置相同的：\n\n- 域名（Region Name）\n- 修订级别（Revision Level）\n- VLAN 到实例的映射关系（VLAN Mapping）\n\n只有三者完全一致，设备才属于同一个 MST 域。域内运行 MSTP，域间通过 CIST 交互。\n\n### 实例（Instance）与 MSTI\n\n- **CIST（Common and Internal Spanning Tree）**：域内和域间共同计算的单生成树，实例 ID 为 0。\n- **MSTI（Multiple Spanning Tree Instance）**：实例 ID 1~4094，每个实例独立计算生成树。\n- **CST（Common Spanning Tree）**：域间通过 CIST 根桥连接形成的树，每个域视为一个逻辑节点。\n\nVLAN 映射到实例后，该 VLAN 的流量沿对应实例的生成树转发。未映射的 VLAN 默认映射到实例 0（CIST）。\n\n### 端口角色与状态\n\nMSTP 端口角色继承 RSTP：根端口（Root Port）、指定端口（Designated Port）、替代端口（Alternate Port）、备份端口（Backup Port）、边缘端口（Edge Port）。状态只有 Discarding、Learning、Forwarding 三种。\n\n## 协议机制详解\n\n### BPDU 格式与字段\n\nMSTP 使用 MST BPDU，格式基于 RSTP BPDU 扩展。关键字段：\n\n- **Protocol Version Identifier**：3 表示 MSTP。\n- **BPDU Type**：0x02 表示 RSTP/MSTP。\n- **Flags**：包含 TC、Proposal、Agreement 等标志。\n- **Root Identifier**：CIST 根桥 ID。\n- **Root Path Cost**：到 CIST 根桥的路径开销。\n- **Bridge Identifier**：发送桥 ID。\n- **Port Identifier**：发送端口 ID。\n- **Message Age / Max Age / Hello Time / Forward Delay**：同 RSTP。\n- **Version 1 Length**：固定 0，表示后面是 MSTP 扩展。\n- **MSTP 扩展字段**：\n  - **MST Configuration Identifier**：包含格式选择符、域名、修订级别、配置摘要（Configuration Digest）。配置摘要由 VLAN 映射表通过 HMAC-MD5 计算得出，用于快速校验域配置是否一致。\n  - **CIST Internal Root Path Cost**：到 CIST 域内根桥的开销。\n  - **CIST Bridge Identifier**：域内 CIST 桥 ID。\n  - **CIST Remaining Hops**：剩余跳数，用于快速收敛。\n  - **MSTI Configuration Messages**：每个 MSTI 的配置信息，包括 MSTI 标志、MSTI 根桥 ID、MSTI 内部路径开销、MSTI 桥 ID、MSTI 剩余跳数。\n\n### 拓扑计算过程\n\nMSTP 的拓扑计算分为三步：\n\n1. **CIST 计算**：\n   - 每个域选举一个 CIST 域根（CIST Regional Root），域内到域根开销最小的桥成为域根。\n   - 域间通过比较 CIST 根桥 ID、外部路径开销等选举总根（CIST Root）。\n   - 域内所有设备计算到 CIST 域根的最短路径，形成 CIST。\n\n2. **MSTI 计算**：\n   - 每个 MSTI 独立选举根桥（MSTI Root），比较优先级、MAC、路径开销。\n   - 每个 MSTI 计算自己的生成树，端口角色独立确定。\n   - MSTI 的根桥必须位于同一个 MST 域内（因为 MSTI 信息只在域内传播）。\n\n3. **端口角色确定**：\n   - 对于 CIST，端口角色由 CIST 计算决定。\n   - 对于 MSTI，端口角色由 MSTI 计算决定，但需与 CIST 协调（例如，CIST 的根端口在 MSTI 中可能是指定端口）。\n\n### 快速收敛机制\n\nMSTP 继承 RSTP 的快速收敛特性：\n\n- **P/A 机制（Proposal/Agreement）**：在点到点链路上，上游端口发送 Proposal 置位的 BPDU，下游端口同意后立即进入 Forwarding，无需等待计时器。\n- **边缘端口**：直接连接终端的端口可配置为边缘端口，链路 up 后立即转发，不参与生成树计算。\n- **根端口快速切换**：当根端口失效，替代端口可快速成为新根端口（需满足同步条件）。\n\n### 与相邻技术的分工\n\n- **STP/RSTP**：单生成树，所有 VLAN 共享拓扑。MSTP 通过多实例实现负载分担。\n- **VRRP**：MSTP 负责二层防环与负载分担，VRRP 负责三层网关冗余，两者常配合使用（如 MSTP 实例 1 的根桥与 VRRP 主网关在同一设备）。\n- **Smart Link**：用于双上行组网，替代 STP 的阻塞机制，收敛更快，但 MSTP 更通用。\n\n## 设计取舍\n\n- **实例数量**：实例越多，计算和资源消耗越大。通常根据 VLAN 分组规划，2~4 个实例即可满足负载分担。\n- **域划分**：域内配置必须严格一致，否则设备会分裂到不同域，导致 CIST 计算异常。建议统一规划域名、修订级别和映射。\n- **根桥规划**：CIST 根桥和 MSTI 根桥应分布在不同设备上，实现负载分担。通常将不同实例的根桥优先级设为不同值。\n- **兼容性**：MSTP 域与非 MSTP 设备互连时，通过 CIST 交互，但非 MSTP 设备不识别 MSTI，可能导致部分 VLAN 流量路径不优。",
+  "cmds": [
+    "display stp region-configuration",
+    "display stp instance 1",
+    "display stp brief",
+    "display stp interface GigabitEthernet0/0/1"
+  ],
+  "pits": [
+    "域内域名、修订级别、VLAN 映射必须完全一致，否则分裂成不同域。",
+    "实例 0 为 CIST，不能直接映射 VLAN，VLAN 默认映射到实例 0。",
+    "MSTI 根桥必须在同一 MST 域内，跨域无法形成 MSTI。",
+    "边缘端口建议手动配置，避免误接交换机导致环路。",
+    "修改映射后需提交（active region-configuration）才生效。"
+  ],
+  "qa": [
+    {
+      "q": "MSTP 中 CIST 和 MSTI 的区别是什么？",
+      "a": "CIST 是域内和域间共同计算的单生成树（实例 0），负责域间拓扑；MSTI 是域内独立计算的实例（1~4094），用于 VLAN 负载分担。MSTI 根桥必须在域内。"
+    },
+    {
+      "q": "MSTP 如何实现负载分担？",
+      "a": "将不同 VLAN 映射到不同 MSTI，每个 MSTI 独立计算生成树，通过设置不同实例的根桥优先级，使不同实例的阻塞端口分布在不同的链路上，从而让不同 VLAN 流量走不同路径。"
+    },
+    {
+      "q": "MSTP 域内配置不一致会有什么后果？",
+      "a": "设备会认为不属于同一域，分裂成多个域，CIST 计算将每个域视为一个逻辑节点，可能导致次优路径或环路。需保证域名、修订级别、VLAN 映射完全一致。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 交换技术"
+}

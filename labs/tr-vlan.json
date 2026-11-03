@@ -1,0 +1,138 @@
+{
+  "title": "排错：PC划错VLAN",
+  "subtitle": "接入层VLAN划分错误导致同网段PC不通",
+  "level": "进阶",
+  "minutes": 20,
+  "tags": [
+    "排错",
+    "VLAN",
+    "接入层"
+  ],
+  "mode": "troubleshoot",
+  "symptom": "PC1能ping通自己的网关192.168.10.1，但ping不通同网段的PC2（192.168.10.20）。",
+  "intro": "这套网络本来应该是全通的，两台PC在同一网段，通过两台交换机互联。现在PC1无法访问PC2，但网关正常，问题出在接入层。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700"
+    },
+    {
+      "name": "SW2",
+      "model": "S5700"
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "ip": "192.168.10.20",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "PC2",
+      "aPort": "GE0/0/0",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/2",
+      "b": "SW2",
+      "bPort": "GE0/0/2"
+    }
+  ],
+  "base": {
+    "SW1": [
+      "system-view",
+      "sysname SW1",
+      "vlan batch 10",
+      "interface GigabitEthernet0/0/1",
+      "port link-type access",
+      "port default vlan 10",
+      "quit",
+      "interface GigabitEthernet0/0/2",
+      "port link-type trunk",
+      "port trunk allow-pass vlan 10",
+      "quit",
+      "interface Vlanif10",
+      "ip address 192.168.10.1 24",
+      "quit"
+    ],
+    "SW2": [
+      "system-view",
+      "sysname SW2",
+      "vlan batch 10",
+      "interface GigabitEthernet0/0/1",
+      "port link-type access",
+      "port default vlan 10",
+      "quit",
+      "interface GigabitEthernet0/0/2",
+      "port link-type trunk",
+      "port trunk allow-pass vlan 10",
+      "quit"
+    ]
+  },
+  "inject": {
+    "SW2": [
+      "interface GigabitEthernet0/0/1",
+      "port default vlan 20",
+      "quit"
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "title": "定位并修复",
+      "brief": "先看现象、缩小范围、查配置和协议状态，把故障点找出来改回去。",
+      "why": "排错不是猜，是按层次缩小范围。",
+      "hints": [
+        "先确认PC1的IP、掩码、网关是否正确，然后从PC1 ping网关和PC2，判断故障范围。",
+        "在SW1上display mac-address看PC2的MAC是否学到，在SW2上display current-configuration interface GigabitEthernet0/0/1检查VLAN划分。",
+        "在SW2的GE0/0/1接口下执行port default vlan 10，恢复正确VLAN。"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/1",
+          "expect": "port default vlan 10"
+        }
+      ],
+      "keep": [
+        {
+          "dev": "PC1",
+          "cmd": "ping 192.168.10.1",
+          "expect": "0.00% packet loss"
+        },
+        {
+          "dev": "PC1",
+          "cmd": "ping 192.168.10.20",
+          "expect": "0.00% packet loss"
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "interface GigabitEthernet0/0/1",
+          "port default vlan 10",
+          "quit"
+        ]
+      }
+    }
+  ],
+  "id": "tr-vlan",
+  "source": "builtin",
+  "txttips": []
+}

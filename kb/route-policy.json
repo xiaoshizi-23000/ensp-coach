@@ -1,0 +1,49 @@
+{
+  "id": "route-policy",
+  "title": "路由策略与策略路由的区别",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "路由策略",
+    "策略路由",
+    "Route-Policy",
+    "PBR",
+    "Policy-Based Route"
+  ],
+  "one": "路由策略过滤/修改路由表，策略路由则让报文按策略转发，不查路由表。",
+  "analogy": "路由策略就像公司修改员工通讯录：决定谁进通讯录、电话写多少号，但打电话时还是按通讯录拨。策略路由则像老板直接给秘书一张VIP名单：名单上的人来电，不管通讯录怎么写，一律转接老板专线。一个管名单本身，一个管通话怎么接。",
+  "body": "## 为什么容易混淆\n\n两者名字都带“策略”，配置里都常见 route-policy 字样，但作用对象完全不同：\n\n- **路由策略（Routing Policy）**：操作对象是**路由条目**，影响路由表里有什么、路由属性是什么。它不直接转发数据，只影响路由的生成、接收和发布。\n- **策略路由（Policy-Based Routing，PBR）**：操作对象是**数据报文**，在转发平面根据策略直接指定下一跳或出接口，不依赖路由表（或先于路由表）。\n\n一句话：路由策略管“路怎么修”，策略路由管“车怎么走”。\n\n## 路由策略（Routing Policy）\n\n### 本质\n\n路由策略是一组工具的总称，核心是 **route-policy**，配合 ACL、IP-Prefix、AS-Path-Filter、Community-Filter 等匹配工具，在路由协议收/发路由时执行过滤和属性修改。\n\n### route-policy 的节点结构\n\n一个 route-policy 由多个 node 组成，每个 node 有：\n\n- **node 编号**：从小到大匹配，默认步长 10。\n- **if-match 子句**：匹配条件，如 `if-match ip-prefix P1`、`if-match community-filter 1`、`if-match as-path-filter 1`。同一 node 内多个 if-match 是“与”关系；不写 if-match 表示匹配所有。\n- **apply 子句**：匹配后执行的动作，如 `apply cost`、`apply preference`、`apply community`、`apply ip-address next-hop`。\n- **匹配模式**：`permit` 或 `deny`。permit 表示匹配后执行 apply 并允许通过；deny 表示匹配后拒绝该路由。\n\n匹配流程：路由进入 route-policy，从最小 node 开始逐个检查 if-match。若某 node 所有 if-match 都满足，则执行该 node 的 apply 和 permit/deny 动作，**不再向下匹配**。若都不满足，继续下一个 node。所有 node 都不匹配时，默认行为是 **deny**（不同厂商有差异，VRP 中 route-policy 末尾隐含 deny）。\n\n### 典型应用场景\n\n1. **路由过滤**：在协议视图下用 `filter-policy` 调用 ACL/IP-Prefix，或在邻居上调用 route-policy，控制哪些路由能进路由表或发给邻居。\n2. **路由属性修改**：在 BGP 中修改 Local_Preference、MED、AS_Path、Community，影响选路。\n3. **路由引入时打标签**：在 import-route 时调用 route-policy，给引入的路由设置 tag 或 cost，便于后续过滤。\n\n### 设计取舍\n\n- route-policy 是**控制平面**工具，只影响路由表，不直接影响已建立的数据流。修改后需要等待路由收敛。\n- 匹配工具分离：ACL 匹配目的/源地址，IP-Prefix 匹配前缀和掩码范围，AS-Path-Filter 匹配 AS 路径，Community-Filter 匹配 BGP 团体属性。这种分离让配置更灵活，但也增加了学习成本。\n\n## 策略路由（PBR）\n\n### 本质\n\nPBR 在**转发平面**对报文进行策略匹配，匹配后直接指定下一跳、出接口或修改报文优先级，**不查路由表**（或先于路由表）。\n\n### 实现方式\n\nVRP 中 PBR 通过 **traffic-filter** 或 **traffic behavior** 实现，通常用 MQC（模块化 QoS 命令行）框架：\n\n1. 用 `traffic classifier` 定义流分类，匹配 ACL、VLAN、DSCP 等。\n2. 用 `traffic behavior` 定义动作，如 `redirect ip-nexthop`、`redirect interface`、`remark dscp`。\n3. 用 `traffic policy` 绑定 classifier 和 behavior。\n4. 在接口入方向应用 `traffic-policy`。\n\n匹配到流后，执行 behavior 中的重定向动作，报文从指定下一跳或接口转发，不再查路由表。\n\n### 与路由表的关系\n\n- PBR 优先于路由表：报文先匹配 PBR 策略，命中则按策略转发；未命中才查路由表。\n- PBR 可以基于源地址、目的地址、协议、端口等五元组，比路由表更细粒度。\n- PBR 通常用于**入方向**，在接口上应用。\n\n### 设计取舍\n\n- PBR 是**数据平面**工具，直接影响转发，配置错误会立即导致业务中断。\n- PBR 不感知路由收敛，若重定向的下一跳不可达，报文可能被丢弃（取决于配置，可配置 track 联动）。\n- PBR 增加转发面查表开销，高密度策略可能影响性能。\n\n## 对比总结\n\n| 维度 | 路由策略 | 策略路由 |\n|------|----------|----------|\n| 作用对象 | 路由条目 | 数据报文 |\n| 作用平面 | 控制平面 | 转发平面 |\n| 是否查路由表 | 是（最终转发仍查表） | 否（命中策略直接转发） |\n| 匹配依据 | 路由属性（前缀、AS_Path、Community 等） | 报文五元组、VLAN、DSCP 等 |\n| 典型工具 | route-policy、filter-policy、IP-Prefix | MQC、traffic-policy、PBR |\n| 影响范围 | 路由表内容，间接影响转发 | 直接决定报文转发路径 |\n| 收敛影响 | 需要等待路由收敛 | 立即生效，不依赖路由收敛 |\n\n## 现场如何选择\n\n- 要控制**哪些路由能被学习或发布**、修改路由属性影响选路 → 用路由策略。\n- 要基于**源地址、应用端口**等让特定流量走特定链路，且不想改动路由表 → 用策略路由。\n- 两者可叠加：先用路由策略保证路由表正确，再用 PBR 对特定业务流做精细调度。\n\n## 常见误区\n\n- 认为 route-policy 能直接转发报文：不能，它只操作路由。\n- 认为 PBR 会修改路由表：不会，PBR 只影响转发，路由表不变。\n- 在 route-policy 中忘记配置 permit 节点导致路由被默认 deny：VRP 中 route-policy 末尾隐含 deny，需显式配置 permit 节点。\n- PBR 重定向的下一跳不可达时未配置 track，导致流量黑洞。",
+  "cmds": [
+    "display route-policy",
+    "display ip routing-table",
+    "display traffic policy user-defined",
+    "display traffic-policy applied-record",
+    "display ip interface brief"
+  ],
+  "pits": [
+    "route-policy 末尾隐含 deny，忘记配 permit 节点会过滤掉所有路由。",
+    "PBR 重定向下一跳不可达时未联动 track，流量被丢弃。",
+    "filter-policy 对 OSPF 只过滤路由表，不影响 LSA 泛洪。",
+    "route-policy 中 if-match 多个条件是“与”关系，容易配错。",
+    "PBR 在接口入方向应用，方向配反不生效。"
+  ],
+  "qa": [
+    {
+      "q": "路由策略和策略路由的本质区别是什么？",
+      "a": "路由策略操作路由条目，影响路由表，属控制平面；策略路由操作数据报文，直接指定转发路径，属转发平面。前者管路由生成/发布，后者管报文转发。"
+    },
+    {
+      "q": "route-policy 中多个 node 的匹配顺序和默认行为？",
+      "a": "按 node 编号从小到大匹配，命中一个 node 后执行其动作并停止。所有 node 都不匹配时，默认 deny（VRP）。"
+    },
+    {
+      "q": "PBR 命中策略后还会查路由表吗？",
+      "a": "不会。PBR 优先于路由表，命中后直接按策略指定的下一跳或出接口转发，不再查路由表。"
+    },
+    {
+      "q": "filter-policy 和 route-policy 在 BGP 中的区别？",
+      "a": "filter-policy 只能过滤路由，不能修改属性；route-policy 既可过滤又可修改 BGP 属性（如 Local_Preference、MED、AS_Path）。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由策略与策略路由"
+}

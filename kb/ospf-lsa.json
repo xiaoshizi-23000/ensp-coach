@@ -1,0 +1,45 @@
+{
+  "id": "ospf-lsa",
+  "title": "OSPF LSA 类型与作用范围",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "LSA",
+    "链路状态通告",
+    "Link State Advertisement",
+    "Type 1-5",
+    "Type 7"
+  ],
+  "one": "OSPF 用 LSA 描述网络拓扑，不同类型作用范围不同。",
+  "analogy": "把 OSPF 网络想象成一个公司。每个部门内部有自己的组织架构图（Router LSA），部门领导会汇总本部门情况发给其他部门（Network Summary LSA），公司总部（ASBR）还会把外部合作公司的信息发给大家（AS External LSA）。不同级别的信息只在相应范围内传播，避免全公司都收到一堆无关细节。",
+  "body": "## 为什么需要多种 LSA\n\nOSPF 是链路状态协议，每台路由器都要拿到全网拓扑才能算路。但全网拓扑如果只用一种 LSA 描述，会带来两个问题：一是规模大了以后 LSA 数量爆炸，每台路由器都要存一份完整数据库，内存和 CPU 扛不住；二是拓扑变化时泛洪范围太大，稳定性差。所以 OSPF 把拓扑信息拆成多种 LSA，每种 LSA 有明确的**作用范围**（泛洪范围），只在需要的区域内传播，区域边界路由器（ABR）负责把区域内的信息汇总后以另一种 LSA 发到其他区域。这样既保证了区域内部有足够细节算路，又让区域之间只看到汇总信息，实现了层次化设计。\n\n## LSA 头部格式\n\n所有 LSA 共享一个 20 字节的头部，关键字段：\n\n- **LS Age**：LSA 年龄，单位秒，最大 3600，达到 MaxAge 后要重新泛洪。\n- **Options**：可选能力位，比如 E-bit 表示支持外部路由，N-bit 表示支持 NSSA。\n- **LS Type**：LSA 类型，1~5、7 等。\n- **Link State ID**：不同 LSA 含义不同，比如 Router LSA 里是 Router ID，Network LSA 里是 DR 接口 IP。\n- **Advertising Router**：产生该 LSA 的路由器 Router ID。\n- **LS Sequence Number**：序列号，用于判断新旧，初始 0x80000001，最大 0x7FFFFFFF。\n- **LS Checksum**：校验和，包含头部和内容。\n- **Length**：整个 LSA 长度。\n\n路由器收到 LSA 后，比较序列号、年龄和校验和来决定是否更新本地数据库。序列号大的新，序列号相同则年龄大的新（但年龄差超过 15 分钟视为不同）。\n\n## 各类 LSA 详解\n\n### Type 1：Router LSA\n\n- **产生者**：每台路由器。\n- **作用范围**：**本区域**内泛洪，不出区域。\n- **内容**：描述路由器的所有链路状态，包括链路类型（Point-to-Point、Transit、Stub、Virtual Link）、链路 ID、接口 IP、Metric 等。还有 Flags 字段标识是否 ABR（B-bit）、是否 ASBR（E-bit）、是否虚连接端点（V-bit）。\n- **Link State ID**：产生者的 Router ID。\n- **为什么这样设计**：Router LSA 是区域内部拓扑的基础，每台路由器都要知道区域内所有路由器的直连情况，所以必须在本区域泛洪。但区域外路由器不需要知道区域内部细节，所以不跨区域。\n\n### Type 2：Network LSA\n\n- **产生者**：广播或 NBMA 网络上的 DR（Designated Router）。\n- **作用范围**：**本区域**内泛洪。\n- **内容**：描述该广播网段上所有已建立邻接关系的路由器（包括 DR 自己），列出它们的 Router ID。\n- **Link State ID**：DR 在该网段的接口 IP 地址。\n- **为什么这样设计**：广播网段上多台路由器两两建立邻接关系会形成 N*(N-1)/2 条邻接，LSA 泛洪和 SPF 计算开销大。DR 代表整个网段生成一条 Network LSA，其他路由器只需和 DR 建立邻接，SPF 计算时把网段看作一个伪节点（pseudo-node），拓扑变成星型，简化了计算。\n\n### Type 3：Network Summary LSA\n\n- **产生者**：ABR。\n- **作用范围**：**本区域**内泛洪（ABR 会为每个区域生成一份，发到该区域内）。\n- **内容**：描述区域间的路由，即目的网段和开销。Link State ID 是目的网段地址，Advertising Router 是 ABR 的 Router ID。\n- **为什么这样设计**：区域之间不需要知道对方内部的详细拓扑，只需要知道“通过哪个 ABR 能到哪个网段，开销多少”。ABR 把区域内的路由汇总成 Type 3 LSA 发到其他区域，其他区域的路由器据此计算区域间路由。注意 Type 3 LSA 不会泛洪到完全 Stub 区域以外？实际上 Stub 区域不允许 Type 5，但允许 Type 3。\n\n### Type 4：ASBR Summary LSA\n\n- **产生者**：ABR。\n- **作用范围**：**本区域**内泛洪。\n- **内容**：描述如何到达 ASBR。Link State ID 是 ASBR 的 Router ID，Advertising Router 是 ABR 的 Router ID。\n- **为什么这样设计**：Type 5 LSA 由 ASBR 产生，但 ASBR 可能在其他区域，本区域内的路由器需要知道 ASBR 的位置才能计算外部路由。Type 4 LSA 就是告诉本区域路由器“到 ASBR 请找这个 ABR”。它相当于一条指向 ASBR 的主机路由。\n\n### Type 5：AS External LSA\n\n- **产生者**：ASBR。\n- **作用范围**：**整个 AS**（除了 Stub 区域和 NSSA 区域）。\n- **内容**：描述外部路由（来自其他协议或静态路由），包括目的网段、掩码、Metric、Forwarding Address、External Route Tag 等。\n- **为什么这样设计**：外部路由信息需要让整个 OSPF 域都知道，所以泛洪范围最大。但 Stub 区域和 NSSA 区域为了减少数据库规模，不允许 Type 5 进入。Stub 区域用默认路由出去，NSSA 区域用 Type 7 LSA 在本区域内部传递外部路由。\n\n### Type 7：NSSA External LSA\n\n- **产生者**：NSSA 区域内的 ASBR。\n- **作用范围**：**本 NSSA 区域**内泛洪。\n- **内容**：和 Type 5 类似，描述外部路由，但只在 NSSA 区域内传播。\n- **为什么这样设计**：NSSA 区域不允许 Type 5，但区域内部可能有路由器需要引入外部路由。Type 7 LSA 让这些外部路由在 NSSA 内部传递，到了 NSSA 的 ABR 时，ABR 可以选择将其翻译成 Type 5 LSA 发到其他区域（需要配置 translate）。翻译时 P-bit 决定是否翻译。\n\n## 作用范围总结\n\n| LSA 类型 | 名称 | 产生者 | 泛洪范围 |\n|---------|------|--------|----------|\n| Type 1 | Router LSA | 每台路由器 | 本区域 |\n| Type 2 | Network LSA | DR | 本区域 |\n| Type 3 | Network Summary LSA | ABR | 本区域（ABR 为每个区域生成） |\n| Type 4 | ASBR Summary LSA | ABR | 本区域 |\n| Type 5 | AS External LSA | ASBR | 整个 AS（除 Stub/NSSA） |\n| Type 7 | NSSA External LSA | NSSA 内 ASBR | 本 NSSA 区域 |\n\n## 设计取舍\n\nOSPF 通过区域划分和 LSA 类型分离，实现了拓扑信息的层次化。区域内部用 Type 1/2 保证细节，区域间用 Type 3/4 汇总，外部路由用 Type 5/7。这样既控制了 LSDB 规模，又限制了拓扑变化的泛洪范围。代价是区域间路由可能不是最优（因为汇总丢失细节），且需要合理规划区域边界和 ABR/ASBR 位置。\n\n## 和相邻技术的分工\n\n- **IS-IS**：同样有层次化设计，但 LSA 类型更少（LSP 和 SNP），通过 Level-1/2 划分区域。\n- **BGP**：用于 AS 之间，OSPF 的 Type 5 可以引入 BGP 路由，但 BGP 本身不依赖 LSA。\n- **PIM-SM**：在 OSPF 区域内使用 Type 1/2 计算单播路由，组播路由表独立。\n\n理解 LSA 类型和作用范围是 OSPF 排错的基础，比如区域间路由不通要查 Type 3，外部路由不通要查 Type 5 和 Type 4，NSSA 要查 Type 7 翻译。",
+  "cmds": [
+    "display ospf lsdb",
+    "display ospf lsdb router 1.1.1.1",
+    "display ospf lsdb summary",
+    "display ospf lsdb ase",
+    "display ospf brief"
+  ],
+  "pits": [
+    "Stub 区域不能有 Type 5，配了会邻居起不来",
+    "NSSA 的 Type 7 翻译要检查 P-bit 和 translate 配置",
+    "Type 3 LSA 的 Link State ID 是网段地址，不是掩码",
+    "ASBR 在别的区域时，本区域要有 Type 4 才能算外部路由",
+    "虚连接区域不能是 Stub 或 NSSA"
+  ],
+  "qa": [
+    {
+      "q": "OSPF 有哪些 LSA 类型？各自作用范围是什么？",
+      "a": "Type1/2 在本区域泛洪，Type3/4 由 ABR 产生在本区域泛洪，Type5 在整个 AS 泛洪（除 Stub/NSSA），Type7 只在 NSSA 内泛洪。"
+    },
+    {
+      "q": "为什么需要 Type 4 LSA？",
+      "a": "Type5 由 ASBR 产生，但 ASBR 可能在其他区域，本区域路由器需要知道如何到达 ASBR 才能计算外部路由，Type4 就是 ABR 告诉本区域到 ASBR 的路由。"
+    },
+    {
+      "q": "NSSA 区域中 Type 7 LSA 如何转换？",
+      "a": "NSSA 的 ABR 根据 P-bit 决定是否将 Type7 翻译成 Type5 发到其他区域，默认转换 Router ID 最大的 ABR 做翻译。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术 OSPF 高级特性"
+}

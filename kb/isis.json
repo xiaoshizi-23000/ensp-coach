@@ -1,0 +1,47 @@
+{
+  "id": "isis",
+  "title": "IS-IS 分层结构与邻居建立",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "IS-IS",
+    "Intermediate System to Intermediate System",
+    "分层结构",
+    "邻居建立",
+    "IIH",
+    "Level-1",
+    "Level-2"
+  ],
+  "one": "IS-IS 通过 Level-1/Level-2 分层和 IIH 报文建立邻居，实现域内路由。",
+  "analogy": "IS-IS 就像一家公司分部门和总公司：Level-1 是部门内部，大家互相认识；Level-2 是总公司，部门领导之间互通。部门员工要跨部门办事，得先找自己领导（Level-1-2 路由器），领导再通过总公司网络（Level-2）联系对方领导。这样设计是为了让部门内部变动不影响总公司，结构清晰、好管理。",
+  "body": "## 为什么需要分层\n\nIS-IS 是一种链路状态路由协议，最初为 OSI 的 CLNP 设计，后来扩展支持 IPv4/IPv6。在大规模网络中，如果所有路由器都在一个平面里泛洪链路状态信息，LSDB 会变得巨大，SPF 计算频繁，稳定性差。IS-IS 采用两级分层结构：Level-1（区域内）和 Level-2（骨干区）。\n\n- **Level-1**：负责区域内部路由，只维护本区域的 LSDB，不知道其他区域的明细。\n- **Level-2**：负责区域间路由，维护骨干区的 LSDB，相当于骨干路由器。\n- **Level-1-2**：同时参与两个层次，像 ABR 一样，将 Level-1 的明细通过 ATT 比特通告给区域内的路由器，并将区域间路由注入 Level-1。\n\n这种设计的好处是：区域内部拓扑变化不会影响其他区域，Level-2 路由器不需要知道每个区域的明细，减轻了骨干设备的负担。\n\n## 层次与路由器类型\n\n| 路由器类型 | 维护的 LSDB | 作用 |\n|-----------|------------|------|\n| Level-1 | Level-1 LSDB | 区域内部通信 |\n| Level-2 | Level-2 LSDB | 骨干区域通信 |\n| Level-1-2 | 两个 LSDB | 连接区域与骨干 |\n\n默认情况下，华为路由器接口的 circuit-type 是 Level-1-2，即同时建立 Level-1 和 Level-2 邻居。\n\n## 邻居建立过程\n\nIS-IS 邻居建立通过 IIH（IS-IS Hello）报文完成。IIH 报文分为两种：Level-1 LAN IIH 和 Level-2 LAN IIH（广播网络），以及 P2P IIH（点到点网络）。\n\n### 广播网络中的邻居建立\n\n在广播网络中，IS-IS 选举 DIS（Designated Intermediate System），类似于 OSPF 的 DR，但没有 Backup DIS。DIS 负责伪节点（Pseudonode）的 LSP 生成和泛洪。\n\n邻居建立过程：\n\n1. 路由器从接口发送 IIH 报文，携带系统 ID、区域地址、支持的协议、邻居列表等。\n2. 收到 IIH 后，检查区域地址是否匹配（Level-1 要求区域地址一致，Level-2 不要求）。\n3. 检查认证信息（如果配置了认证）。\n4. 检查接口的 circuit-type 是否兼容（例如 Level-1 接口只能与 Level-1 或 Level-1-2 建立 Level-1 邻居）。\n5. 检查 MTU（P2P 模式下会检查，广播模式下不检查）。\n6. 检查系统 ID 是否冲突（不能相同）。\n7. 如果所有检查通过，则建立邻居关系，状态从 Down 变为 Up（广播网络）或 Initializing 变为 Up（P2P）。\n\n### 点到点网络中的邻居建立\n\nP2P 网络中，IS-IS 通过三次握手建立邻居：\n\n1. 路由器发送 P2P IIH，状态为 Down。\n2. 收到对端 IIH 后，如果对端 IIH 的邻居列表中包含自己的系统 ID，则状态变为 Initializing。\n3. 自己发送的 IIH 中邻居列表包含对端系统 ID，对端收到后状态变为 Up。\n4. 双方都收到对方的 IIH 且邻居列表包含自己，状态变为 Up。\n\nP2P 模式下，IS-IS 会检查 MTU，如果 MTU 不匹配，邻居可能停留在 Initializing 状态。\n\n### 邻居建立的条件\n\n- **区域地址**：Level-1 邻居要求区域地址一致；Level-2 邻居不要求。\n- **系统 ID**：不能冲突。\n- **认证**：如果配置了认证，必须匹配。\n- **接口类型**：circuit-type 必须兼容。\n- **MTU**：P2P 模式下要求 MTU 一致（华为默认不检查，但可以配置）。\n- **网络类型**：广播网络和 P2P 网络的 IIH 格式不同，不能建立邻居。\n\n## IIH 报文格式\n\nIIH 报文是 IS-IS PDU 的一种，类型为 15（Level-1 LAN IIH）、16（Level-2 LAN IIH）、17（P2P IIH）。主要字段包括：\n\n- **Circuit Type**：表示接口的层次类型（1、2、3 分别表示 Level-1、Level-2、Level-1-2）。\n- **System ID**：发送者的系统 ID。\n- **Holding Time**：邻居保持时间，默认 30 秒（华为默认 30 秒，10 倍 Hello 间隔）。\n- **PDU Length**：报文长度。\n- **Priority**：DIS 选举优先级（广播网络）。\n- **LAN ID**：DIS 的系统 ID 和伪节点 ID（广播网络）。\n- **TLV**：可变字段，包括区域地址 TLV（1）、协议支持 TLV（129）、IP 接口地址 TLV（132）、邻居 TLV（6）等。\n\n## DIS 选举\n\n广播网络中，IS-IS 选举 DIS，规则如下：\n\n1. 比较接口优先级（Priority），范围 0-127，默认 64，值越大越优先。\n2. 如果优先级相同，比较 System ID（或 SNPA），值越大越优先。\n3. 如果 System ID 相同，比较伪节点 ID（Pseudonode ID），值越大越优先。\n\nDIS 选举是抢占式的，新加入的路由器如果优先级更高，会立即成为 DIS。DIS 负责生成伪节点 LSP，代表广播网络。\n\n## 与 OSPF 的对比\n\n| 特性 | IS-IS | OSPF |\n|------|-------|------|\n| 分层 | Level-1/Level-2 | Area 0/其他区域 |\n| 骨干区 | Level-2（连续） | Area 0（连续） |\n| 区域边界 | Level-1-2 路由器 | ABR |\n| 邻居建立 | IIH | Hello |\n| DIS/DR | DIS（无备份） | DR/BDR |\n| 封装 | 直接封装在数据链路层 | 封装在 IP 层 |\n| 扩展性 | 较好 | 一般 |\n\n## 设计取舍\n\nIS-IS 将分层信息放在路由器级别而不是接口级别（一个路由器可以同时是 Level-1 和 Level-2），简化了区域边界的设计。Level-2 路由器需要连续，否则需要虚链路（类似 OSPF）。IS-IS 的 TLV 结构非常灵活，易于扩展，这是它后来能支持 IPv6 和 Segment Routing 的重要原因。\n\n## 常见问题\n\n- **邻居无法建立**：检查区域地址、认证、circuit-type、系统 ID 冲突、MTU（P2P）。\n- **邻居状态不稳定**：检查 Holding Time 和 Hello 间隔，链路质量。\n- **DIS 选举不符合预期**：检查优先级和 System ID。\n- **Level-1 路由无法到达其他区域**：检查 Level-1-2 路由器的 ATT 比特和默认路由。",
+  "cmds": [
+    "display isis peer",
+    "display isis interface",
+    "display isis lsdb",
+    "display isis route",
+    "display isis error"
+  ],
+  "pits": [
+    "Level-1 邻居要求区域地址一致，Level-2 不要求。",
+    "P2P 邻居建立需三次握手，MTU 不一致会卡在 Initializing。",
+    "DIS 选举抢占式，优先级高者立即成为 DIS。",
+    "系统 ID 冲突会导致邻居无法建立。",
+    "广播网络 IIH 不检查 MTU，P2P 检查。"
+  ],
+  "qa": [
+    {
+      "q": "IS-IS 邻居建立的条件有哪些？",
+      "a": "区域地址（Level-1 需一致）、系统 ID 不冲突、认证匹配、circuit-type 兼容、MTU（P2P）一致、网络类型相同。"
+    },
+    {
+      "q": "IS-IS 的 DIS 和 OSPF 的 DR 有什么区别？",
+      "a": "DIS 没有备份，选举是抢占式的；DR 有 BDR，选举非抢占。DIS 优先级范围 0-127，DR 是 0-255。"
+    },
+    {
+      "q": "Level-1-2 路由器如何实现区域间路由？",
+      "a": "Level-1-2 路由器在 Level-1 LSP 中设置 ATT 比特，向区域内注入默认路由，并将 Level-1 明细通过 Level-2 LSP 通告到骨干区。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术"
+}

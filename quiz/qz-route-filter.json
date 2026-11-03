@@ -1,0 +1,44 @@
+{
+  "title": "路由被过滤",
+  "level": "HCIP",
+  "cat": "路由",
+  "symptom": "R1 与 R2 的 BGP 邻居已 Established，R1 上能查到从 R2 学来的路由，但路由表里没有这些条目，业务不通。",
+  "topology": "flowchart LR\n  R1[R1 AR2220] -- GE0/0/0 --- R2[R2 AR2220]\n  R2 -- GE0/0/1 --- R3[R3 AR2220]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display bgp routing-table",
+      "output": " BGP Local router ID : 10.1.1.1\n Total number of routes: 2\n   Network            NextHop        LocPrf  Path/Ogn\n *>  10.2.2.0/24        10.1.1.2        100    65002?\n *>  10.3.3.0/24        10.1.1.2        100    65002?"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display ip routing-table 10.2.2.0",
+      "output": "Route Flags: R - relay, D - download to fib\nDestination/Mask  Proto  Pre  Cost  NextHop  Interface\n  (no matched route)"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display current-configuration | include filter",
+      "output": " ip ip-prefix DENY index 10 deny 10.2.2.0 24\n ip ip-prefix DENY index 20 permit 0.0.0.0 0 less-equal 32\n bgp 65001\n  peer 10.1.1.2 ip-prefix DENY import"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 对邻居应用了 import 方向的 ip-prefix 过滤，路由被拒绝",
+      "ok": true
+    },
+    {
+      "label": "R1 与 R2 的 BGP 版本不一致导致路由丢弃",
+      "ok": false
+    },
+    {
+      "label": "R2 没有配置 network 命令宣告这些网段",
+      "ok": false
+    },
+    {
+      "label": "R1 的 BGP 路由优先级低于静态路由被覆盖",
+      "ok": false
+    }
+  ],
+  "explain": "BGP 表有条目但路由表无对应条目，且配置中 peer import 方向挂了 ip-prefix DENY，说明路由被入方向策略过滤。用 display bgp routing-table 与 display ip routing-table 对比即可定位，去掉 import 过滤后路由立即生效。",
+  "id": "qz-route-filter"
+}

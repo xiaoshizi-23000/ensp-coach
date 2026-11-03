@@ -1,0 +1,44 @@
+{
+  "title": "跨交换机同 VLAN 不通",
+  "level": "HCIA",
+  "cat": "交换",
+  "symptom": "两台交换机下挂同VLAN的PC互ping不通，但各自在本交换机内能ping通同VLAN的其他PC。",
+  "topology": "flowchart LR\nPC1[PC1] --> SW1[SW1 S5700]\nSW2[SW2 S5700] --> PC2[PC2]\nSW1 -- GE0/0/1 <--> GE0/0/1 -- SW2",
+  "shows": [
+    {
+      "dev": "SW1",
+      "cmd": "display port vlan active",
+      "output": "PORT            VLAN  STATUS\nGE0/0/1         1     U\n               10     T\nGE0/0/2         10    U"
+    },
+    {
+      "dev": "SW2",
+      "cmd": "display port vlan active",
+      "output": "PORT            VLAN  STATUS\nGE0/0/1         1     U\n               20     T\nGE0/0/2         10    U"
+    },
+    {
+      "dev": "SW1",
+      "cmd": "display vlan 10",
+      "output": "VLAN 10 is exist\n  Untagged: GE0/0/2\n  Tagged  : GE0/0/1"
+    }
+  ],
+  "options": [
+    {
+      "label": "SW1 和 SW2 互联口的 Trunk 放行 VLAN 列表不一致",
+      "ok": true
+    },
+    {
+      "label": "SW1 上 VLAN 10 未创建",
+      "ok": false
+    },
+    {
+      "label": "SW2 的 GE0/0/2 接口未加入 VLAN 10",
+      "ok": false
+    },
+    {
+      "label": "两台交换机互联口的 PVID 不一致导致 VLAN 10 流量被丢弃",
+      "ok": false
+    }
+  ],
+  "explain": "SW1 的 Trunk 放行 VLAN 10，SW2 的 Trunk 只放行 VLAN 20，VLAN 10 帧被丢弃。在 SW1 和 SW2 上执行 display port vlan active 对比 Trunk 放行列表即可确认。",
+  "id": "qz-trunk"
+}

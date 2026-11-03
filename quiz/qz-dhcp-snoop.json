@@ -1,0 +1,39 @@
+{
+  "title": "DHCP Snooping 拦了合法请求",
+  "level": "HCIP",
+  "cat": "安全",
+  "symptom": "开启 DHCP Snooping 后，部分楼层终端无法获取 IP 地址，其他楼层正常。",
+  "topology": "flowchart LR\n  DHCP[DHCP Server\\nS5700] -->|GE0/0/1| CORE[Core SW\\nS5700]\n  CORE -->|GE0/0/2| ACC1[Acc SW 1F\\nS3700]\n  CORE -->|GE0/0/3| ACC2[Acc SW 2F\\nS3700]\n  ACC1 --> PC1[PC 1F]\n  ACC2 --> PC2[PC 2F]",
+  "shows": [
+    {
+      "dev": "Core SW",
+      "cmd": "display dhcp snooping",
+      "output": "DHCP Snooping is enabled.\n\nInterface               Trusted\nGE0/0/1                 Trusted\nGE0/0/2                 Untrusted\nGE0/0/3                 Untrusted"
+    },
+    {
+      "dev": "Core SW",
+      "cmd": "display dhcp snooping statistics",
+      "output": "DHCP packets received from untrusted ports: 12\nDHCP packets discarded from untrusted ports: 12\n  Discarded OFFER packets: 6\n  Discarded ACK packets: 6"
+    }
+  ],
+  "options": [
+    {
+      "label": "连接 DHCP 服务器的上行口未配置为信任口",
+      "ok": false
+    },
+    {
+      "label": "连接各楼层接入交换机的下行口未配置为信任口",
+      "ok": true
+    },
+    {
+      "label": "DHCP Snooping 绑定表未生成导致报文被丢弃",
+      "ok": false
+    },
+    {
+      "label": "全局未开启 DHCP Snooping 功能",
+      "ok": false
+    }
+  ],
+  "explain": "回显显示 GE0/0/2、GE0/0/3 为 Untrusted，服务器回应的 OFFER/ACK 从这些口进入被丢弃，故部分楼层拿不到地址。将级联下行口配置 dhcp snooping trusted 后恢复。用 display dhcp snooping 可一锤定音。",
+  "id": "qz-dhcp-snoop"
+}

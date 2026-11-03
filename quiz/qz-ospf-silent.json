@@ -1,0 +1,44 @@
+{
+  "title": "OSPF 被静默",
+  "level": "HCIP",
+  "cat": "路由",
+  "symptom": "R1 与 R2 直连接口状态为 Up，但 OSPF 邻居关系无法建立，其他路由协议运行正常。",
+  "topology": "flowchart LR\n  R1[R1 AR2220] ---|G0/0/0| R2[R2 AR2220]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display ospf peer",
+      "output": "OSPF Process 1 with Router ID 1.1.1.1\n Neighbors\n Total: 0"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display ospf interface GigabitEthernet0/0/0",
+      "output": "Interface: GigabitEthernet0/0/0 (Silent)\n Area: 0.0.0.0\n State: Down\n Cost: 1\n Type: Broadcast\n MTU: 1500"
+    },
+    {
+      "dev": "R2",
+      "cmd": "display ospf peer",
+      "output": "OSPF Process 1 with Router ID 2.2.2.2\n Neighbors\n Total: 0"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 的接口被配置为静默接口",
+      "ok": true
+    },
+    {
+      "label": "R1 的 OSPF 区域 ID 和 R2 不一致",
+      "ok": false
+    },
+    {
+      "label": "R1 的接口地址掩码写错了",
+      "ok": false
+    },
+    {
+      "label": "R2 没有开启 OSPF",
+      "ok": false
+    }
+  ],
+  "explain": "R1 的 G0/0/0 被配置为静默接口，导致 OSPF 不发送也不接收 Hello 报文，邻居无法建立。display ospf interface 显示接口状态为 Silent 即可确认。",
+  "id": "qz-ospf-silent"
+}

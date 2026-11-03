@@ -1,0 +1,50 @@
+{
+  "id": "ospf-state",
+  "title": "OSPF 邻居状态机八个状态",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "OSPF",
+    "邻居状态机",
+    "Neighbor State Machine",
+    "FSM",
+    "Down",
+    "Init",
+    "2-Way",
+    "ExStart",
+    "Exchange",
+    "Loading",
+    "Full"
+  ],
+  "one": "OSPF 邻居建立过程中经历的八个状态，反映邻接关系的进展。",
+  "analogy": "就像两个人从陌生到成为搭档：先互相看见（Down→Init），确认眼神（2-Way），商量谁先发言（ExStart），交换各自掌握的线索（Exchange），消化对方给的资料（Loading），最后达成完全同步（Full）。每一步都得按顺序来，跳步就会出问题。",
+  "body": "## 为什么需要状态机\n\nOSPF 是链路状态协议，路由器之间必须先建立可靠的邻接关系，才能交换 LSA 并同步 LSDB。邻居状态机（Neighbor State Machine）定义了从初始到完全邻接的八个阶段，每个阶段有明确的进入条件和报文交互，确保双方能力协商、数据库同步有序进行。状态机也是排错的核心依据：`display ospf peer` 看到的状态直接告诉你卡在哪一步。\n\n## 八个状态详解\n\n### 1. Down\n初始状态，未收到任何 Hello 报文。路由器在接口上启用 OSPF 后，会周期性（默认 10s，NBMA 30s）发送 Hello。收到 Hello 后进入 Init。\n\n### 2. Init\n收到对方的 Hello，但对方 Hello 的邻居列表中没有自己的 Router ID。说明对方还没收到我的 Hello（单向通信）。此时应检查链路连通性、接口是否 up、认证是否一致。\n\n### 3. 2-Way\n收到的 Hello 邻居列表中包含自己的 Router ID，表示双向通信已建立。这是稳定状态，但不是所有邻居都进入 Full：在广播网络中，非 DR/BDR 之间停留在 2-Way，只有 DR/BDR 与其他路由器建立 Full 邻接。\n\n### 4. ExStart\n开始协商主从关系（Master/Slave），用于确定 DD 报文的序列号。双方发送空的 DD 报文（不携带 LSA 头），其中包含 Initial Sequence Number、I/M/MS 位。Router ID 大的一方成为 Master，使用自己的序列号。此状态卡住常见于 MTU 不一致（华为设备默认不检查 MTU，但某些厂商会检查）或 ACL 过滤了 DD 报文。\n\n### 5. Exchange\n主从关系确定后，双方交换包含 LSA 头部的 DD 报文，描述本地 LSDB 的摘要。DD 报文有序列号和 Flags（I、M、MS），确保可靠传输。Exchange 完成后，双方知道对方有哪些 LSA 自己没有。\n\n### 6. Loading\n根据 Exchange 阶段得到的摘要，向对方发送 LSR（Link State Request）请求缺失的完整 LSA，对方用 LSU 回应，收到后发送 LSAck 确认。此状态卡住通常是因为 LSR/LSU 报文丢失或 MTU 问题导致大包丢弃。\n\n### 7. Full\n双方 LSDB 完全同步，邻接关系建立完成。此时可以开始 SPF 计算。只有 Full 状态的邻居才参与路由计算。\n\n### 8. 其他状态\n- **Attempt**：仅用于 NBMA 网络，表示已向邻居发送 Hello 但未收到回应，需手动配置邻居。\n- **Down**：如果邻居失效（Dead Timer 超时），状态回到 Down。\n\n## 状态迁移与报文对应\n\n| 状态 | 触发事件 | 关键报文 |\n|------|----------|----------|\n| Down | 收到 Hello | Hello |\n| Init | Hello 中看到自己 | Hello |\n| 2-Way | 双向通信确认 | Hello |\n| ExStart | 开始协商主从 | DD (空) |\n| Exchange | 主从确定，交换摘要 | DD (带 LSA 头) |\n| Loading | 请求完整 LSA | LSR/LSU/LSAck |\n| Full | LSDB 同步完成 | - |\n\n## 设计取舍\n\n- **为什么需要 ExStart**：DD 报文需要序列号保证可靠传输，必须确定谁主导序列号，避免冲突。\n- **为什么非 DR/BDR 停留在 2-Way**：减少广播网中的邻接数量，降低 LSDB 同步开销。\n- **状态机与 SPF 解耦**：只有 Full 才触发 SPF，避免不完整数据库导致计算错误。\n\n## 排错思路\n\n- 卡在 Init：检查单向连通性、认证、Hello 间隔/Dead 间隔。\n- 卡在 ExStart：检查 MTU（`display interface`）、ACL 是否放行 OSPF 报文（协议号 89）。\n- 卡在 Exchange/Loading：检查 MTU、LSR/LSU 是否被过滤、链路质量。\n- 频繁 Down：检查 Dead Timer、链路闪断、CPU 过载。",
+  "cmds": [
+    "display ospf peer",
+    "display ospf peer verbose",
+    "display ospf interface",
+    "display ospf error"
+  ],
+  "pits": [
+    "MTU 不一致可能导致卡在 ExStart/Exchange",
+    "认证不一致会卡在 Init",
+    "广播网非 DR/BDR 之间停留在 2-Way 是正常的",
+    "Hello 间隔或 Dead 间隔不匹配会导致邻居无法建立",
+    "ACL 过滤 OSPF 报文（协议号 89）会导致状态异常"
+  ],
+  "qa": [
+    {
+      "q": "OSPF 邻居状态机有哪八个状态？",
+      "a": "Down、Init、2-Way、ExStart、Exchange、Loading、Full，以及 NBMA 网络中的 Attempt。"
+    },
+    {
+      "q": "什么情况下邻居会停留在 2-Way 状态？",
+      "a": "在广播网络中，非 DR/BDR 路由器之间不建立 Full 邻接，停留在 2-Way 是正常现象。"
+    },
+    {
+      "q": "OSPF 邻居卡在 ExStart 可能是什么原因？",
+      "a": "常见原因有 MTU 不一致、ACL 过滤 DD 报文、Router ID 冲突或单向通信。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术 OSPF 邻居状态机"
+}

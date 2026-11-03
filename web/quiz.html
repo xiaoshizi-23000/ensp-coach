@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>排错速练 · 网络实验陪练</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body{overflow:hidden}
+  .hh{display:flex;align-items:center;gap:14px;padding:12px 22px;border-bottom:1px solid var(--line);
+    background:var(--panel)}
+  .hh a{font-size:12.5px;color:var(--dim);text-decoration:none;padding:4px 10px;
+    border:1px solid var(--line);border-radius:14px}
+  .hh a:hover{color:var(--text);border-color:var(--accent-bd)}
+  .hh h1{margin:0;font-size:15px;font-weight:600}
+  .hh .tabs{display:flex;gap:6px}
+  .hh .tabs button{font-size:12.5px;padding:4px 14px;border-radius:14px;border:1px solid var(--line);
+    background:transparent;color:var(--dim)}
+  .hh .tabs button.on{border-color:var(--accent-bd);color:var(--accent);background:var(--panel2)}
+  .hh .sp{flex:1}
+  .km{display:grid;grid-template-columns:300px minmax(0,1fr);height:calc(100vh - 55px)}
+  .ks{border-right:1px solid var(--line);padding:14px;display:flex;flex-direction:column;
+    gap:10px;min-height:0;background:var(--panel)}
+  .ka{overflow-y:auto;padding:26px 40px 80px}
+  .qa h2{font-size:17px;font-weight:600;margin:0 0 6px}
+  .qa .lv{font-size:10.5px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);
+    color:var(--faint);vertical-align:middle;margin-left:6px}
+  .sym{border:1px solid var(--err-bd);background:var(--err-bg);color:var(--err-fg);
+    border-radius:8px;padding:10px 14px;font-size:13px;line-height:1.8;margin:12px 0}
+  .sym:before{content:"故障现象";display:block;font-size:10.5px;letter-spacing:1.4px;
+    color:var(--err);opacity:.85;margin-bottom:4px}
+  .topo{font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--faint);background:var(--code);
+    border:1px solid var(--line);border-radius:8px;padding:9px 12px;white-space:pre;margin:10px 0}
+  .show{margin:10px 0}
+  .show .cmd{font:12px ui-monospace,Consolas,monospace;color:var(--accent);margin-bottom:4px}
+  .show pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--dim);white-space:pre-wrap;overflow:auto}
+  .opts{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .opts button{text-align:left;padding:11px 14px;border-radius:9px;border:1px solid var(--line);
+    background:var(--panel);color:var(--text);font-size:13px;line-height:1.6}
+  .opts button:hover{border-color:var(--accent-bd)}
+  .opts button.right{border-color:var(--ok-bd);background:var(--ok-bg);color:var(--ok)}
+  .opts button.wrong{border-color:var(--err-bd);background:var(--err-bg);color:var(--err-fg)}
+  .opts button:disabled{opacity:.85;cursor:default}
+  .exp{margin-top:14px;padding:11px 14px;background:var(--panel2);border-left:2px solid var(--accent-bd);
+    border-radius:0 8px 8px 0;font-size:13px;line-height:1.9}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .stat b{display:block;font-size:22px;font-weight:600}
+  .stat span{font-size:11.5px;color:var(--faint)}
+  .sec-t{font-size:11px;letter-spacing:1.2px;color:var(--faint);margin:20px 0 10px}
+  .row{display:flex;justify-content:space-between;gap:10px;font-size:12.8px;padding:7px 0;
+    border-top:1px solid var(--line);color:var(--dim)}
+  .row b{color:var(--text);font-weight:500;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .kbs-empty{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0}
+</style>
+</head>
+<body>
+<div class="hh">
+  <a href="/">← 回实验台</a>
+  <h1>排错速练</h1>
+  <div class="tabs">
+    <button id="tabDo" class="on">做题</button>
+    <button id="tabRev">复盘</button>
+  </div>
+  <span class="sp"></span>
+  <button id="theme" class="x theme-btn" title="切换主题"><span class="brand brand-apple"><img src="assets/apple.png" alt=""></span><span class="brand brand-huawei"><img src="assets/huawei.svg" alt=""></span></button>
+</div>
+
+<div class="km">
+  <aside class="ks">
+    <div id="quizCats" class="kb-cats"></div>
+    <div class="list" id="quizList"></div>
+  </aside>
+  <section class="ka" id="pane"></section>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+let cat = new URLSearchParams(location.search).get("cat") || "";
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+setTheme(localStorage.getItem("theme") || "apple");
+
+async function api(p, b) {
+  const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
+  return (await fetch(p, o)).json();
+}
+
+async function loadList() {
+  const r = await api(`/api/quiz?cat=${encodeURIComponent(cat)}`);
+  if (!r.ok) return;
+  const cats = $("#quizCats");
+  cats.innerHTML = "";
+  [""].concat(r.cats || []).forEach((c) => {
+    const b = el("button", c === cat ? "on" : "", c || "全部");
+    b.onclick = () => { cat = c; load(); };
+    cats.appendChild(b);
+  });
+  const box = $("#quizList");
+  box.innerHTML = "";
+  if (!(r.items || []).length) {
+    box.appendChild(el("div", "kbs-empty", "还没题目"));
+    return;
+  }
+  r.items.forEach((it) => {
+    const d = el("div", "kb-item");
+    const b = document.createElement("b");
+    b.appendChild(document.createTextNode(it.title || ""));
+    b.appendChild(el("span", "kb-lv " + (it.level || ""), it.level || ""));
+    d.appendChild(b);
+    d.appendChild(el("span", null, (it.symptom || "").slice(0, 40)));
+    d.onclick = () => openQuiz(it.id, d);
+    box.appendChild(d);
+  });
+  if ((r.items || [])[0]) openQuiz(r.items[0].id, box.firstChild);
+}
+
+async function openQuiz(id, node) {
+  document.querySelectorAll(".kb-item.on").forEach((x) => x.classList.remove("on"));
+  if (node) node.classList.add("on");
+  const d = await api("/api/quiz/" + id);
+  if (!d || d.ok === false) return;
+  const pane = $("#pane");
+  pane.innerHTML = "";
+  const qa = el("div", "qa");
+  const h = el("h2");
+  h.appendChild(document.createTextNode(d.title || ""));
+  h.appendChild(el("span", "lv", d.level || ""));
+  h.appendChild(el("span", "lv", d.cat || ""));
+  qa.appendChild(h);
+  const sym = el("div", "sym", d.symptom || "");
+  qa.appendChild(sym);
+  if (d.topology) qa.appendChild(el("div", "topo", d.topology));
+  (d.shows || []).forEach((s) => {
+    const w = el("div", "show");
+    w.appendChild(el("div", "cmd", s.dev + "：" + s.cmd));
+    w.appendChild(el("pre", null, s.output || ""));
+    qa.appendChild(w);
+  });
+  qa.appendChild(el("div", "sec-t", "问题出在哪？点一个选项"));
+  const opts = el("div", "opts");
+  const answer = async (i, btn) => {
+    [...opts.children].forEach((x) => (x.disabled = true));
+    const r = await api(`/api/quiz/${id}/answer?choice=${i}`, {});
+    [...opts.children].forEach((x, j) => {
+      if ((d.options[j] || {}).ok) x.classList.add("right");
+    });
+    if (!r.correct) btn.classList.add("wrong");
+    const ex = el("div", "exp", (r.correct ? "答对了。" : "不对。") + (r.explain || ""));
+    qa.appendChild(ex);
+    const nxt = el("button", "btn primary", "下一题 →");
+    nxt.style.marginTop = "12px";
+    nxt.onclick = () => {
+      const idx = items.findIndex((x) => x.id === id);
+      const n = items[idx + 1];
+      if (n) openQuiz(n.id, $("#quizList").children[idx + 1]);
+    };
+    qa.appendChild(nxt);
+  };
+  (d.options || []).forEach((o, i) => {
+    const b = el("button", null, o.label || "");
+    b.onclick = () => answer(i, b);
+    opts.appendChild(b);
+  });
+  qa.appendChild(opts);
+  pane.appendChild(qa);
+}
+
+let revLoaded = false;
+async function showReview() {
+  const r = await api("/api/review");
+  const pane = $("#pane");
+  pane.innerHTML = "";
+  if (!r.ok) return;
+  const head = el("div", "stats");
+  const card = (v, t) => { const c = el("div", "stat"); c.appendChild(el("b", null, String(v))); c.appendChild(el("span", null, t)); return c; };
+  head.appendChild(card(r.attempts, "交卷次数"));
+  head.appendChild(card(r.avg == null ? "-" : r.avg, "平均分"));
+  head.appendChild(card(r.best == null ? "-" : r.best, "最高分"));
+  head.appendChild(card(r.quiz ? r.quiz.wrong : 0, "速练答错"));
+  pane.appendChild(head);
+
+  if ((r.byCmd || []).length) {
+    pane.appendChild(el("div", "sec-t", "最容易卡住的命令"));
+    r.byCmd.forEach((x) => {
+      const row = el("div", "row");
+      row.appendChild(el("b", null, x.label));
+      row.appendChild(el("span", null, x.n + " 次"));
+      pane.appendChild(row);
+    });
+  }
+  if ((r.byCat || []).length) {
+    pane.appendChild(el("div", "sec-t", "按实验分布"));
+    r.byCat.forEach((x) => {
+      const row = el("div", "row");
+      row.appendChild(el("span", null, x.label));
+      row.appendChild(el("b", null, x.n + " 次"));
+      pane.appendChild(row);
+    });
+  }
+  pane.appendChild(el("div", "sec-t", "最近记录"));
+  if (!(r.recent || []).length) {
+    pane.appendChild(el("div", "kbs-empty", "还没有记录"));
+    return;
+  }
+  r.recent.forEach((e) => {
+    const row = el("div", "row");
+    row.appendChild(el("span", null, `${e.labTitle || ""} · ${e.title || ""}`));
+    row.appendChild(el("b", null, (e.cmd || "").slice(0, 40)));
+    pane.appendChild(row);
+  });
+}
+
+$("#tabDo").onclick = () => {
+  $("#tabDo").classList.add("on"); $("#tabRev").classList.remove("on");
+  loadList();
+};
+$("#tabRev").onclick = () => {
+  $("#tabRev").classList.add("on"); $("#tabDo").classList.remove("on");
+  showReview();
+};
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+setTheme(localStorage.getItem("theme") || "apple");
+
+loadList();
+</script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+{
+  "id": "vlan-principle",
+  "title": "VLAN 隔离原理与端口类型",
+  "level": "HCIA",
+  "cat": "交换",
+  "keys": [
+    "VLAN",
+    "Virtual LAN",
+    "虚拟局域网",
+    "Access",
+    "Trunk",
+    "Hybrid",
+    "PVID",
+    "802.1Q"
+  ],
+  "one": "用逻辑方式把一台交换机切成多个广播域，靠端口类型和 Tag 决定报文归属。",
+  "analogy": "一栋大楼原本是一个大通间，谁说话所有人都听得见，吵得没法干活。VLAN 就是给大楼砌上隔断墙，把大通间分成一间间独立办公室，每间屋里说话只在本屋传。端口类型就是门口的门卫：Access 门卫只放本屋的人进出，并且把外来人的工牌摘掉；Trunk 门卫认工牌，带着工牌的人原样放行；Hybrid 门卫最灵活，可以按名单决定哪些人摘牌、哪些人带牌。",
+  "body": "## 为什么需要 VLAN\n\n二层交换机的本质是一个广播域：所有端口在同一个广播域里，ARP 请求、DHCP Discover、未知单播都会泛洪到每一个端口。终端一多，广播流量线性增长，广播风暴风险上升，而且不同部门之间二层直接可达，安全边界无从谈起。\n\n早期做法是物理隔离——一个部门一台交换机。成本高、端口利用率低、跨楼层布线困难。VLAN（Virtual LAN，IEEE 802.1Q）把“广播域”从物理端口上解耦：一台交换机内部可以划分多个逻辑广播域，每个 VLAN 就是一个独立的广播域，VLAN 之间二层完全隔离，必须经过三层设备才能互通。\n\n设计上的核心取舍是：**隔离靠 VLAN ID，跨设备传递靠 Tag**。VLAN ID 只有 12 bit，范围 1–4094（0 和 4095 保留），这是 802.1Q 字段长度决定的硬上限，也是后来 QinQ、VXLAN 出现的动因之一。\n\n## 802.1Q 帧格式\n\n标准以太网帧在 SA 之后插入 4 字节 Tag：\n\n| 字段 | 长度 | 说明 |\n|---|---|---|\n| TPID | 2 字节 | 固定 0x8100，标识这是一个 802.1Q 帧 |\n| PRI | 3 bit | 802.1p 优先级，0–7，QoS 用 |\n| CFI/DEI | 1 bit | 规范格式指示，以太网中为 0 |\n| VLAN ID | 12 bit | 1–4094 |\n\n注意 TPID 位置：普通帧 EtherType 字段被 0x8100 替换，真正的上层类型（0x0800 IPv4 等）后移到 Tag 之后。所以抓包时看到 0x8100 就知道是带 Tag 的帧。\n\n## 端口类型与转发规则\n\n华为交换机端口有三种链路类型，本质区别在于**收帧时怎么处理 Tag、发帧时加不加 Tag**。每个端口还有一个 PVID（Port VLAN ID，默认 VLAN 1），用于给 Untagged 帧打标。\n\n### Access\n\n- 收：只接受 Untagged 帧，按 PVID 打 Tag 后进入对应 VLAN；收到带 Tag 的帧直接丢弃（除非 Tag 等于 PVID，不同版本行为有差异，工程上按丢弃理解）。\n- 发：剥离 Tag，以 Untagged 发出。\n- 用途：接终端、接服务器，终端不认识 VLAN。\n\n### Trunk\n\n- 收：Untagged 帧按 PVID 打标进入 PVID 所在 VLAN；Tagged 帧检查该 VLAN 是否在允许列表（allow-pass vlan）中，在则放行，不在则丢弃。\n- 发：VLAN ID 等于 PVID 的帧剥离 Tag 发出，其余允许 VLAN 的帧带 Tag 发出。\n- 用途：交换机之间、交换机到路由器单臂路由。\n\n### Hybrid\n\nHybrid 是华为特有的、Access 与 Trunk 的超集，收发两个方向都可以按 VLAN 单独配置“带 Tag 还是不带 Tag”：\n\n- 收：Untagged 帧按 PVID 打标；Tagged 帧查允许列表。\n- 发：查该 VLAN 是否在端口的 Untagged 列表中——在则剥 Tag 发，不在但在 Tagged 列表中则带 Tag 发，都不在则不发。\n\n配置命令是 `port hybrid tagged vlan` / `port hybrid untagged vlan`。Access 等价于“只允许一个 VLAN 且 Untagged”，Trunk 等价于“PVID 那个 VLAN Untagged、其余允许 VLAN Tagged”。理解这一点，三种端口类型就不用死记。\n\n### 转发决策流程\n\n1. 帧进入端口，确定所属 VLAN（Untagged 用 PVID，Tagged 用帧内 VID）。\n2. 查 MAC 表，命中则从出端口转发；未命中则在**该 VLAN 内**泛洪。\n3. 出端口检查该 VLAN 是否允许通过，以及 Tag 处理方式。\n\n关键点：泛洪范围严格限制在入帧所属 VLAN 内，这就是隔离的实现位置。MAC 表项也带 VLAN 属性，同一 MAC 在不同 VLAN 中是两条独立表项。\n\n## 链路类型与 PVID 的配合\n\nPVID 是“无标记帧的归属”，不是“端口的 VLAN”。常见误解是把 PVID 当成端口只能属于这个 VLAN。实际上 Trunk/Hybrid 端口可以承载多个 VLAN，PVID 只影响 Untagged 帧的归属和 PVID 对应 VLAN 的出方向是否剥 Tag。\n\n典型场景：交换机互联口两端 PVID 不一致，且某 VLAN 恰好等于一端 PVID，就会出现一端发 Untagged、另一端按自己 PVID 打标，VLAN 串位。所以互联口两端 PVID 建议保持一致或统一改为非业务 VLAN。\n\n## 与相邻技术的分工\n\n- **VLAN vs 子网**：VLAN 是二层隔离，子网是三层划分。工程惯例是一 VLAN 一子网，但技术上不强制。\n- **VLAN vs VXLAN**：VLAN 只有 4094 个，且依赖生成树；VXLAN 用 24 bit VNI 支持约 1600 万租户，跑在三层网络上，是大二层数据中心的主流方案。\n- **VLAN 间通信**：必须三层转发，方案有单臂路由（子接口 + dot1q termination vid）和三层交换机 VLANIF 接口。VLANIF 是主流，因为硬件线速转发。\n- **MUX VLAN / 端口隔离**：同一 VLAN 内还想隔离时使用，MUX VLAN 分主 VLAN 和从 VLAN（互通型/隔离型），端口隔离则更轻量。\n\n## 设计取舍\n\nVLAN 把隔离做在二层，代价是：广播域变小但配置复杂度上升；跨设备 VLAN 需要 Trunk 逐跳传递，VLAN 规划必须全网一致；生成树仍然按 VLAN 或实例计算，VLAN 数量大时收敛和收敛域管理成本高。这些代价正是后来 VXLAN、EVPN 要解决的问题。",
+  "cmds": [
+    "display vlan",
+    "display port vlan",
+    "display interface GigabitEthernet0/0/1",
+    "display mac-address vlan 10"
+  ],
+  "pits": [
+    "互联口两端 PVID 不一致会导致 VLAN 串位，务必核对",
+    "Access 口收到带 Tag 帧会被丢弃，终端侧不要误配 Trunk",
+    "Hybrid 口 Untagged 列表与 Tagged 列表不能对同一 VLAN 同时配置",
+    "VLAN 1 是默认 VLAN，业务不要跑在 VLAN 1 上",
+    "MAC 表项带 VLAN 属性，查表时要指定 VLAN 否则误判"
+  ],
+  "qa": [
+    {
+      "q": "Access、Trunk、Hybrid 端口的本质区别是什么？",
+      "a": "收方向：Untagged 帧都按 PVID 打标，Tagged 帧查允许列表。发方向：Access 剥 Tag；Trunk 仅 PVID 对应 VLAN 剥 Tag；Hybrid 按 Untagged 列表逐 VLAN 决定。Hybrid 是前两者的超集。"
+    },
+    {
+      "q": "为什么 VLAN 间通信必须经过三层？",
+      "a": "VLAN 是二层广播域隔离，交换机在二层只按 VLAN 内 MAC 转发，不会跨 VLAN 转发帧。跨 VLAN 必须改变二层封装，由三层设备重新封装并查路由。"
+    },
+    {
+      "q": "PVID 的作用是什么？",
+      "a": "给端口收到的 Untagged 帧打上 VLAN Tag，决定其归属 VLAN；同时决定 Trunk/Hybrid 端口发送该 VLAN 帧时是否剥离 Tag。"
+    }
+  ],
+  "syllabus": "HCIA-Datacom 3.1 以太网交换基础（VLAN 原理与端口类型）"
+}

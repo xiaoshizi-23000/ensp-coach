@@ -1,0 +1,44 @@
+{
+  "title": "VRRP 主备都在备",
+  "level": "HCIP",
+  "cat": "高可用",
+  "symptom": "两台交换机配置 VRRP 后，PC 以虚拟 IP 为网关无法正常通信。登录主设备查看，VRRP 状态显示为 Backup，备设备也是 Backup。",
+  "topology": "flowchart LR\nPC1[PC1] --> SW1[SW1 S5700]\nPC1 --> SW2[SW2 S5700]\nSW1 --- SW2",
+  "shows": [
+    {
+      "dev": "SW1",
+      "cmd": "display vrrp",
+      "output": "VRRP State Information of VRID 1\n  VRID        : 1\n  State       : Backup\n  Virtual IP  : 192.168.1.254\n  Priority    : 100\n  Preempt     : YES\n  Master IP   : 0.0.0.0"
+    },
+    {
+      "dev": "SW2",
+      "cmd": "display vrrp",
+      "output": "VRRP State Information of VRID 1\n  VRID        : 1\n  State       : Backup\n  Virtual IP  : 192.168.1.254\n  Priority    : 100\n  Preempt     : YES\n  Master IP   : 0.0.0.0"
+    },
+    {
+      "dev": "SW1",
+      "cmd": "display vrrp statistics",
+      "output": "VRRP Statistics Information of VRID 1\n  Checksum Errors      : 0\n  Version Errors       : 0\n  Vrid Errors          : 0\n  Received Advertisements: 0\n  Sent Advertisements  : 0"
+    }
+  ],
+  "options": [
+    {
+      "label": "两台设备 VRRP 优先级相同且都未配置抢占，无法选出 Master",
+      "ok": true
+    },
+    {
+      "label": "VRRP 虚拟 IP 与设备接口 IP 不在同一网段",
+      "ok": false
+    },
+    {
+      "label": "两台设备之间链路不通，VRRP 报文无法交互",
+      "ok": false
+    },
+    {
+      "label": "VRRP 版本不一致导致报文被丢弃",
+      "ok": false
+    }
+  ],
+  "explain": "两台设备优先级同为 100，且都未配置抢占，无法选出 Master，状态都停留在 Backup。用 display vrrp 查看两边 Priority 和 Preempt 即可确认，把其中一台优先级调高即可恢复。",
+  "id": "qz-vrrp-pri"
+}

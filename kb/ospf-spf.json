@@ -1,0 +1,45 @@
+{
+  "id": "ospf-spf",
+  "title": "SPF 计算过程与路由优选",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "SPF",
+    "最短路径优先",
+    "Dijkstra",
+    "路由优选",
+    "OSPF"
+  ],
+  "one": "OSPF 用 Dijkstra 算法算最短路径树，再优选路由。",
+  "analogy": "就像你要从家去一个陌生地方，手头有一张地图（LSDB），上面标了所有路口和路段的距离。SPF 就是帮你算出到每个目的地的最短路线，并且只保留最短的那条，其他绕远的就不走了。这样保证你每次出门都走最省时的路。",
+  "body": "## 为什么需要 SPF\n\nOSPF 是链路状态协议，每台路由器都维护一个相同的 LSDB（链路状态数据库），里面是所有路由器生成的 LSA。SPF（Shortest Path First）计算就是基于 LSDB，用 Dijkstra 算法算出以自己为根的最短路径树（SPT），从而得到去往各个目的网段的最优路由。\n\n距离矢量协议（如 RIP）靠邻居传路由，容易产生环路和收敛慢；OSPF 通过 SPF 全局计算，天然无环，收敛快，适合大型网络。\n\n## SPF 计算过程\n\nSPF 计算分为两个阶段：\n\n1. **计算最短路径树（SPT）**：以自己为根，把 LSDB 中的 Router LSA 和 Network LSA 作为节点和边，运行 Dijkstra 算法，计算出到每个节点（路由器或传输网段）的最短距离。\n2. **计算路由**：根据 SPT 和各类 LSA（Router LSA、Network LSA、Summary LSA、AS-external LSA 等），生成路由表条目。\n\n### 第一阶段：构建 SPT\n\nDijkstra 算法维护两个集合：\n\n- **永久集合（SPT）**：已经确定最短路径的节点。\n- **临时集合（候选列表）**：尚未确定的节点，按当前已知最短距离排序。\n\n步骤：\n\n1. 把根节点（自己）放入 SPT，距离为 0。\n2. 遍历根节点的所有邻居（通过 Router LSA 中的 link 和 Network LSA），计算到每个邻居的代价（cost），放入临时集合。\n3. 从临时集合中选出代价最小的节点，移入 SPT。\n4. 以新加入的节点为中间点，更新其邻居的代价（如果经过新节点更短，则更新）。\n5. 重复 3-4，直到临时集合为空。\n\n最终得到一棵以自己为根的最短路径树。\n\n### 第二阶段：计算路由\n\n根据 SPT 和 LSA 类型，计算路由：\n\n- **区域内路由**：通过 Router LSA 和 Network LSA 直接算出。\n- **区域间路由**：通过 Summary LSA（Type 3）计算，ABR 将区域内的路由汇总后发布到其他区域。\n- **外部路由**：通过 AS-external LSA（Type 5）或 NSSA 中的 Type 7 计算，分为 Type 1 和 Type 2。\n\n## 路由优选规则\n\n当有多条路径到达同一目的网段时，OSPF 按以下顺序优选：\n\n1. **区域类型**：区域内路由 > 区域间路由 > 外部路由（Type 1 > Type 2）。\n2. **外部路由的 Type**：Type 1 优于 Type 2。\n3. **cost 值**：对于同一类型，比较到达目的网段的总 cost，越小越优。\n4. **负载分担**：如果 cost 相同，则形成等价路由（ECMP），进行负载分担。\n\n### 详细比较规则\n\n- **区域内 vs 区域间**：区域内路由总是优于区域间路由，即使区域间路由的 cost 更小。\n- **区域间 vs 外部**：区域间路由优于外部路由。\n- **外部 Type 1 vs Type 2**：Type 1 的 cost 是外部 cost 加上内部路径 cost，Type 2 只比较外部 cost。默认 Type 2。\n- **Type 1 比较**：先比较总 cost，若相同则比较外部 cost，再相同则比较内部 cost。\n- **Type 2 比较**：先比较外部 cost，若相同则比较内部 cost。\n\n## SPF 计算触发条件\n\nSPF 计算不是每次收到 LSA 都触发，而是有条件的：\n\n- 收到新的 LSA 且该 LSA 不在 LSDB 中。\n- 收到的 LSA 比 LSDB 中的更新（序列号更大）。\n- 收到自己产生的 LSA 的更新（表示网络拓扑变化）。\n\n为了减少计算频率，OSPF 使用 **SPF 调度**：\n\n- **SPF 延迟**：收到变化后等待一段时间（默认 5 秒）再计算，避免频繁计算。\n- **SPF 保持**：两次 SPF 计算之间至少间隔一段时间（默认 10 秒）。\n- **SPF 最大等待**：如果持续有变化，延迟时间会指数增长，直到最大值（默认 10 秒）。\n\n## 区域划分对 SPF 的影响\n\nOSPF 通过区域划分将网络分成多个区域，每个区域内的路由器只维护本区域的完整 LSDB，区域间路由通过 ABR 汇总。这样：\n\n- 减少了 LSDB 大小和 SPF 计算频率。\n- 提高了网络稳定性，区域内的拓扑变化不会影响其他区域。\n\n但区域间路由可能不是最优路径（因为 ABR 只发布汇总路由），这是设计上的取舍。\n\n## 与相邻技术的分工\n\n- **IS-IS**：同样使用 SPF，但 IS-IS 基于链路层，扩展性更好，常用于大型骨干网。\n- **BGP**：用于域间路由，不运行 SPF，依靠路径属性选路。\n- **PBR**：策略路由可以覆盖 SPF 计算的结果，实现基于策略的转发。\n\n## 设计取舍\n\n- **SPF 计算复杂度**：Dijkstra 算法复杂度 O(N log N)，N 为节点数。区域划分可以降低 N，提高收敛速度。\n- **路由优选规则**：优先区域内路由，保证稳定性，但可能不是全局最优。\n- **SPF 调度**：牺牲收敛速度换取 CPU 稳定性，适合大型网络。\n\n## 验证命令\n\n- `display ospf lsdb`：查看 LSDB。\n- `display ospf spf-tree`：查看 SPF 树。\n- `display ospf routing`：查看 OSPF 路由表。\n- `display ip routing-table protocol ospf`：查看 IP 路由表中的 OSPF 路由。\n- `display ospf brief`：查看 OSPF 进程信息。",
+  "cmds": [
+    "display ospf lsdb",
+    "display ospf spf-tree",
+    "display ospf routing",
+    "display ip routing-table protocol ospf",
+    "display ospf brief"
+  ],
+  "pits": [
+    "区域间路由不一定最优，ABR 只发布汇总路由。",
+    "外部路由 Type 2 默认只比较外部 cost，可能选不到最优路径。",
+    "SPF 计算延迟可能导致收敛慢，需根据网络规模调整。",
+    "等价路由需确保 max load-balancing 足够。",
+    "虚连接（Virtual Link）区域的路由可能影响 SPF 计算。"
+  ],
+  "qa": [
+    {
+      "q": "OSPF 路由优选顺序是什么？",
+      "a": "区域内 > 区域间 > 外部 Type 1 > 外部 Type 2；同类型比较 cost，相同则负载分担。"
+    },
+    {
+      "q": "SPF 计算触发条件有哪些？",
+      "a": "收到新 LSA、收到更新 LSA（序列号更大）、收到自己产生的 LSA 更新。"
+    },
+    {
+      "q": "为什么区域间路由可能不是最优？",
+      "a": "ABR 只发布汇总路由，不发布明细，导致路径可能绕行。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术"
+}

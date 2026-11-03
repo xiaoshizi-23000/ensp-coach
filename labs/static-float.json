@@ -1,0 +1,369 @@
+{
+  "title": "静态路由主备切换",
+  "subtitle": "主备两条静态路由，主链路断开自动切换",
+  "level": "进阶",
+  "minutes": 30,
+  "tags": [
+    "静态路由",
+    "preference",
+    "浮动路由"
+  ],
+  "intro": "两台 AR1220 之间通过两台交换机走主备两条路径，主路径用默认优先级静态路由，备路径改 preference 80，最后断开主链路验证流量自动切到备路径。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 100,
+      "y": 220
+    },
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 350,
+      "y": 120
+    },
+    {
+      "name": "SW2",
+      "model": "S5700",
+      "x": 350,
+      "y": 320
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 600,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/1",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/2",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "SW2",
+      "aPort": "GE0/0/2",
+      "b": "AR2",
+      "bPort": "GE0/0/1"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改两台路由器主机名",
+      "brief": "AR1 和 AR2 分别改名为 AR1、AR2，方便后续识别。",
+      "why": "机房设备多，主机名是排障时第一眼看到的东西，先统一命名规范。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view。",
+        "system-view 进系统视图，sysname AR1 改名，最后 return 回用户视图。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2 换成 sysname AR2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配 AR1 主路径接口地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，接 SW1 走主路径。",
+      "why": "主路径接口先起来，后面静态路由才有出接口可用。",
+      "hints": [
+        "进接口视图配地址，掩码直接写 24。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址。",
+        "system-view\ninterface GigabitEthernet0/0/0\nip address 10.0.12.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配 AR1 备路径接口地址",
+      "brief": "AR1 的 GE0/0/1 配 10.0.13.1/24，接 SW2 走备路径。",
+      "why": "备路径接口也要有地址，否则备用静态路由无法生效。",
+      "hints": [
+        "同样进接口视图配地址，注意是 GE0/0/1。",
+        "interface GigabitEthernet0/0/1 进接口，ip address 10.0.13.1 24 配地址。",
+        "system-view\ninterface GigabitEthernet0/0/1\nip address 10.0.13.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.13.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "ip address 10.0.13.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配 AR2 主备接口地址",
+      "brief": "AR2 的 GE0/0/0 配 10.0.12.2/24，GE0/0/1 配 10.0.13.2/24。",
+      "why": "对端地址必须和 AR1 对应接口同网段，否则直连不通。",
+      "hints": [
+        "两个接口分别进视图配地址，注意网段对应关系。",
+        "GE0/0/0 配 10.0.12.2 24，GE0/0/1 配 10.0.13.2 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\nip address 10.0.12.2 24\nquit\ninterface GigabitEthernet0/0/1\nip address 10.0.13.2 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.13.2"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "interface GigabitEthernet0/0/1",
+          "ip address 10.0.13.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "验证直连互通",
+      "brief": "从 AR1 ping AR2 两个接口地址，都应通。",
+      "why": "直连不通说明地址或链路有问题，先排除底层再配路由。",
+      "hints": [
+        "分别 ping 10.0.12.2 和 10.0.13.2。",
+        "ping -c 4 10.0.12.2 和 ping -c 4 10.0.13.2。",
+        "ping -c 4 10.0.12.2\nping -c 4 10.0.13.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.13.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2",
+          "ping -c 4 10.0.13.2"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "配主用静态路由",
+      "brief": "AR1 和 AR2 各配一条默认优先级静态路由走主路径。",
+      "why": "静态路由默认 preference 60，不加参数就是主用，先让主路径生效。",
+      "hints": [
+        "ip route-static 目的网段 掩码 下一跳，不写 preference 就是默认 60。",
+        "AR1 去 AR2 侧网段走 10.0.12.2，AR2 回程走 10.0.12.1。",
+        "AR1：\nip route-static 10.0.13.0 24 10.0.12.2\nAR2：\nip route-static 10.0.12.0 24 10.0.12.1"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table",
+          "expect": "10.0.13.0/24"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ip route-static 10.0.13.0 24 10.0.12.2",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ip route-static 10.0.12.0 24 10.0.12.1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "配备用静态路由",
+      "brief": "AR1 和 AR2 各配一条 preference 80 的静态路由走备路径。",
+      "why": "preference 80 比默认 60 大，路由表只装主路由，主链路断了备路由才顶上。",
+      "hints": [
+        "在 ip route-static 后面加 preference 80。",
+        "ip route-static 目的网段 掩码 下一跳 preference 80。",
+        "AR1：\nip route-static 10.0.13.0 24 10.0.13.2 preference 80\nAR2：\nip route-static 10.0.12.0 24 10.0.13.1 preference 80"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table",
+          "expect": "10.0.13.0/24"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ip route-static 10.0.13.0 24 10.0.13.2 preference 80",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ip route-static 10.0.12.0 24 10.0.13.1 preference 80",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "确认主路由生效",
+      "brief": "查看路由表，10.0.13.0/24 下一跳应是 10.0.12.2。",
+      "why": "两条路由都在配置里，但路由表只显示优先级高的那条，这是主备的关键。",
+      "hints": [
+        "display ip routing-table 看下一跳。",
+        "display ip routing-table 10.0.13.0 看明细。",
+        "display ip routing-table 10.0.13.0"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table 10.0.13.0",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip routing-table 10.0.13.0"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "断开主链路",
+      "brief": "在 AR1 上 shutdown GE0/0/0，模拟主链路故障。",
+      "why": "现场主链路断掉后，备用路由必须自动接管，不能靠人工改配置。",
+      "hints": [
+        "进接口视图执行 shutdown。",
+        "interface GigabitEthernet0/0/0 进接口，shutdown 关闭。",
+        "system-view\ninterface GigabitEthernet0/0/0\nshutdown\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "down"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "shutdown",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "验证备份路由接管",
+      "brief": "查看路由表下一跳变为 10.0.13.2，并 ping 通对端。",
+      "why": "主路由失效后 preference 80 的备路由被激活，流量自动切到备路径。",
+      "hints": [
+        "先看路由表下一跳，再 ping 10.0.13.2。",
+        "display ip routing-table 10.0.13.0 看下一跳，ping -c 4 10.0.13.2 验证。",
+        "display ip routing-table 10.0.13.0\nping -c 4 10.0.13.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table 10.0.13.0",
+          "expect": "10.0.13.2"
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.13.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip routing-table 10.0.13.0",
+          "ping -c 4 10.0.13.2"
+        ]
+      }
+    }
+  ],
+  "id": "static-float",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器之间走主备两条路径，主用静态路由默认优先级，备用那条改 preference 80，主链路断开后备份自动生效",
+  "syllabus": [
+    "HCIA-Datacom 2.3 静态路由",
+    "HCIP-Datacom 路由与流量控制"
+  ]
+}

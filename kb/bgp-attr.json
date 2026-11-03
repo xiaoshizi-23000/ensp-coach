@@ -1,0 +1,49 @@
+{
+  "id": "bgp-attr",
+  "title": "BGP 公认与可选属性详解",
+  "level": "HCIE",
+  "cat": "路由",
+  "keys": [
+    "BGP 属性",
+    "公认属性",
+    "可选属性",
+    "Well-known",
+    "Optional",
+    "AS_PATH",
+    "NEXT_HOP",
+    "LOCAL_PREF",
+    "MED",
+    "Community"
+  ],
+  "one": "BGP 属性是路由更新中携带的路径参数，用于选路和策略控制。",
+  "analogy": "BGP 属性就像快递包裹上的面单信息：有些信息是必须填的（比如收件人、寄件人），这就是公认属性；有些是选填的（比如保价、备注），这就是可选属性。快递公司根据这些信息决定怎么送、送哪条路，网络里的路由器也根据属性决定走哪条路。",
+  "body": "## 为什么需要 BGP 属性\n\nBGP 是路径矢量协议，路由更新中除了 NLRI（网络层可达信息）外，还携带大量路径属性（Path Attributes）。这些属性描述了路由的来源、路径、下一跳、优先级等，是 BGP 进行路由决策和策略控制的基础。没有属性，BGP 只能知道“可达”，无法实现丰富的选路和过滤。\n\n## 属性分类\n\nBGP 属性分为两大类：\n\n- **公认属性（Well-known）**：所有 BGP 实现都必须识别，且必须包含在 Update 报文中（部分可缺省）。\n- **可选属性（Optional）**：不要求所有实现都识别，按需携带。\n\n进一步细分：\n\n| 类别 | 子类 | 说明 |\n|------|------|------|\n| 公认 | 强制（Mandatory） | 必须出现在 Update 中，如 AS_PATH、NEXT_HOP、ORIGIN |\n| 公认 | 自由决定（Discretionary） | 必须识别，但不一定携带，如 LOCAL_PREF、ATOMIC_AGGREGATE |\n| 可选 | 传递（Transitive） | 若实现不识别，仍会传递给邻居，如 COMMUNITY |\n| 可选 | 非传递（Non-transitive） | 若实现不识别，则忽略且不传递，如 MED |\n\n## 常见属性详解\n\n### 1. ORIGIN（公认强制）\n\n描述路由如何进入 BGP，取值：IGP（0）、EGP（1）、INCOMPLETE（2）。选路时优先 IGP > EGP > INCOMPLETE。\n\n### 2. AS_PATH（公认强制）\n\n记录路由经过的 AS 序列，用于防环和选路。AS_PATH 越短越优。类型包括 AS_SEQUENCE 和 AS_SET。\n\n### 3. NEXT_HOP（公认强制）\n\n指定到达目的网络的下一跳 IP。对于 EBGP，通常是邻居接口地址；对于 IBGP，通常保持不变（除非配置 next-hop-local）。\n\n### 4. LOCAL_PREF（公认自由决定）\n\n仅在 IBGP 内传递，用于指示本地优先级，值越大越优。默认 100。常用于出口选路。\n\n### 5. MED（可选非传递）\n\n多出口鉴别器，用于向外部邻居指示进入本 AS 的优选入口，值越小越优。默认 0。仅在相邻 AS 间传递，不跨 AS 传播。\n\n### 6. COMMUNITY（可选传递）\n\n一种标记，用于简化策略。格式为 AS:NN，常见公认团体：NO_EXPORT（0xFFFFFF01）、NO_ADVERTISE（0xFFFFFF02）、NO_EXPORT_SUBCONFED（0xFFFFFF03）。\n\n### 7. ATOMIC_AGGREGATE（公认自由决定）\n\n表示路由被聚合，且丢失了部分路径信息。\n\n### 8. AGGREGATOR（可选传递）\n\n携带聚合者的 AS 号和路由器 ID。\n\n### 9. ORIGINATOR_ID 和 CLUSTER_LIST（可选非传递）\n\n用于路由反射器（RR）防环。ORIGINATOR_ID 记录路由发起者的 Router ID，CLUSTER_LIST 记录经过的 Cluster ID。\n\n## BGP 选路顺序（华为）\n\n1. 优选协议首选值（PrefVal）最高的路由\n2. 优选本地优先级（LOCAL_PREF）最高的路由\n3. 优选手动聚合 > 自动聚合 > 汇总 > 普通\n4. 优选 AS_PATH 最短的路由\n5. 优选 ORIGIN 类型（IGP > EGP > INCOMPLETE）\n6. 优选 MED 值最小的路由\n7. 优选 EBGP 路由 > IBGP 路由\n8. 优选下一跳 IGP 度量最小的路由\n9. 优选 Cluster_List 最短的路由\n10. 优选 Router ID 最小的路由\n11. 优选对等体地址最小的路由\n\n## 属性在 Update 报文中的格式\n\n每个属性为 TLV 结构：\n\n- **Attr. Type**（2 字节）：高 1 位为 Optional 位，次 1 位为 Transitive 位，低 6 位为类型码。\n- **Attr. Length**（1 或 2 字节）：属性长度。\n- **Attr. Value**：属性值。\n\n例如 AS_PATH 类型码为 2，COMMUNITY 为 8，MED 为 4。\n\n## 设计取舍\n\n- 公认属性保证互操作性，但限制了灵活性；可选属性提供扩展，但需考虑兼容性。\n- LOCAL_PREF 仅在 IBGP 内传递，避免影响外部选路；MED 可跨 AS 但非传递，防止环路和策略泄露。\n- 团体属性用 32 位值，兼顾标记容量和报文开销。\n\n## 与相邻技术的分工\n\n- **路由策略**：通过 Route-Policy 修改属性，实现过滤和选路。\n- **路由反射**：利用 ORIGINATOR_ID 和 CLUSTER_LIST 防环。\n- **联盟**：使用 AS_CONFED_SEQUENCE 等特殊 AS_PATH 类型。\n\n理解属性是掌握 BGP 选路和策略的关键。",
+  "cmds": [
+    "display bgp routing-table",
+    "display bgp routing-table <prefix> verbose",
+    "display bgp peer verbose",
+    "display bgp routing-table community"
+  ],
+  "pits": [
+    "IBGP 传递路由时 NEXT_HOP 默认不变，需 next-hop-local",
+    "MED 默认只在相邻 AS 间比较，需配置 compare-med",
+    "LOCAL_PREF 不会传递给 EBGP 邻居",
+    "COMMUNITY 属性需额外配置 send-community 才会发送",
+    "AS_PATH 防环：收到含本地 AS 号的路由直接丢弃"
+  ],
+  "qa": [
+    {
+      "q": "BGP 公认属性和可选属性的区别是什么？",
+      "a": "公认属性所有 BGP 实现必须识别，可选属性不要求；公认强制必须携带，公认自由决定可缺省；可选传递不识别也转发，非传递则忽略。"
+    },
+    {
+      "q": "LOCAL_PREF 和 MED 有什么区别？",
+      "a": "LOCAL_PREF 用于 IBGP 内选出口，值大优，不传 EBGP；MED 用于向外部 AS 指示入口，值小优，可跨 AS 但非传递。"
+    },
+    {
+      "q": "BGP 选路时 AS_PATH 和 MED 哪个先比较？",
+      "a": "先比较 AS_PATH 长度，再比较 ORIGIN，最后比较 MED。"
+    }
+  ],
+  "syllabus": "HCIE-Datacom BGP 高级特性"
+}

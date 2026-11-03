@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>考证路线 · 网络实验陪练</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body{overflow:hidden}
+  .hh{display:flex;align-items:center;gap:14px;padding:12px 22px;border-bottom:1px solid var(--line);
+    background:var(--panel)}
+  .hh a{font-size:12.5px;color:var(--dim);text-decoration:none;padding:4px 10px;
+    border:1px solid var(--line);border-radius:14px}
+  .hh a:hover{color:var(--text);border-color:var(--accent-bd)}
+  .hh h1{margin:0;font-size:15px;font-weight:600}
+  .hh .sp{flex:1}
+  .path{height:calc(100vh - 55px);overflow-y:auto;padding:30px 0 80px}
+  .path-inner{max-width:760px;margin:0 auto;padding:0 30px}
+  .course-title{font-size:18px;font-weight:600;margin:0 0 4px}
+  .course-sub{color:var(--faint);font-size:12.5px;margin-bottom:24px}
+  .stage{position:relative;padding:0 0 26px 34px;border-left:2px solid var(--line);margin-left:12px}
+  .stage:last-child{border-left-color:transparent;padding-bottom:6px}
+  .stage .dot{position:absolute;left:-11px;top:0;width:20px;height:20px;border-radius:50%;
+    display:grid;place-items:center;font-size:10.5px;background:var(--panel2);color:var(--faint);
+    border:2px solid var(--bg)}
+  .stage.done .dot{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
+  .stage.now .dot{background:var(--accent-bg);border-color:var(--accent-bd);color:var(--accent-fg)}
+  .stage.locked{opacity:.5}
+  .stage-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .stage-head h2{margin:0;font-size:15px;font-weight:600}
+  .stage-head .sy{font-size:11px;color:var(--faint)}
+  .stage .tag{font-size:10.5px;padding:1px 8px;border-radius:10px;border:1px solid var(--ok-bd);
+    color:var(--ok);background:var(--ok-bg);flex:0 0 auto}
+  .stage .tag.lock{border-color:var(--line);color:var(--faint);background:var(--panel2)}
+  .stage .tag.now{border-color:var(--accent-bd);color:var(--accent);background:var(--panel2)}
+  .stage-labs{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .slab{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:9px 13px}
+  .slab .t{font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px}
+  .slab .t i{font-style:normal;font-size:10.5px;color:var(--faint);border:1px solid var(--line);
+    border-radius:4px;padding:0 5px}
+  .slab .s{font-size:12px;color:var(--faint);flex:0 0 auto}
+  .slab .s.ok{color:var(--ok);font-weight:500}
+  .slab .s.bad{color:var(--err)}
+  .slab button{font-size:11.5px;padding:4px 11px;border-radius:7px;border:1px solid var(--accent-bd);
+    background:var(--accent-bg);color:var(--accent-fg);flex:0 0 auto}
+  .slab button.ghost{background:transparent;color:var(--dim)}
+  .slab.locked{opacity:.55}
+  .quizrow{margin-top:10px;background:var(--panel);border:1px dashed var(--line);border-radius:9px;
+    padding:9px 13px;font-size:12.5px;color:var(--dim);display:flex;justify-content:space-between;
+    align-items:center}
+  .quizrow button{font-size:11.5px;padding:4px 11px;border-radius:7px;border:1px solid var(--line);
+    background:transparent;color:var(--dim)}
+  .quizrow button:hover{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="hh">
+  <a href="/">← 回实验台</a>
+  <h1>考证路线</h1>
+  <span class="sp"></span>
+  <button id="theme" class="x theme-btn" title="切换主题"><span class="brand brand-apple"><img src="assets/apple.png" alt=""></span><span class="brand brand-huawei"><img src="assets/huawei.svg" alt=""></span></button>
+</div>
+
+<div class="path">
+  <div class="path-inner">
+    <h2 class="course-title" id="ct">加载中…</h2>
+    <div id="trackTabs" class="kb-cats" style="margin-bottom:10px"></div>
+    <p class="course-sub" id="cs">按考纲把实验排成十站，上一站全部交卷及格才解锁下一站</p>
+    <div id="stages"></div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+setTheme(localStorage.getItem("theme") || "apple");
+
+function goLab(id) {
+  localStorage.setItem("lab", id);
+  location.href = "/";
+}
+function goQuiz(cat) {
+  location.href = cat ? `/quiz?cat=${encodeURIComponent(cat)}` : "/quiz";
+}
+
+let track = new URLSearchParams(location.search).get("track") || "";
+
+async function boot() {
+  const r = await api(`/api/course${track ? "?track=" + encodeURIComponent(track) : ""}`);
+  if (!r.ok) { $("#ct").textContent = r.error || "路线没加载出来"; return; }
+  const tabs = $("#trackTabs");
+  tabs.innerHTML = "";
+  (r.tracks || []).forEach((t) => {
+    const b = el("button", t.id === (track || (r.tracks[0] || {}).id) ? "on" : "", t.title || t.id);
+    b.onclick = () => { track = t.id; boot(); };
+    tabs.appendChild(b);
+  });
+  $("#ct").textContent = r.title;
+  $("#cs").textContent = "按考纲把实验排成十站，上一站全部交卷及格才解锁下一站";
+  const box = $("#stages");
+  box.innerHTML = "";
+  let nowFound = false;
+  r.stages.forEach((s, i) => {
+    const d = el("div", "stage" + (s.done ? " done" : "") + (s.unlocked && !s.done && !nowFound ? " now" : "") + (s.unlocked ? "" : " locked"));
+    if (s.unlocked && !s.done && !nowFound) nowFound = true;
+    d.appendChild(el("div", "dot", s.done ? "✓" : String(i + 1)));
+    const head = el("div", "stage-head");
+    const hwrap = el("div");
+    hwrap.appendChild(el("h2", null, s.name));
+    hwrap.appendChild(el("div", "sy", s.syllabus || ""));
+    head.appendChild(hwrap);
+    if (!s.unlocked) head.appendChild(el("span", "tag lock", "未解锁"));
+    else if (s.done) head.appendChild(el("span", "tag", "已完成"));
+    else if (d.classList.contains("now")) head.appendChild(el("span", "tag now", "进行中"));
+    d.appendChild(head);
+
+    const lw = el("div", "stage-labs");
+    s.labs.forEach((l) => {
+      const row = el("div", "slab" + (s.unlocked ? "" : " locked"));
+      const t = el("div", "t");
+      t.appendChild(el("i", null, "实验"));
+      t.appendChild(document.createTextNode(l.title));
+      row.appendChild(t);
+      if (l.score != null) {
+        row.appendChild(el("span", "s " + (l.score >= 60 ? "ok" : "bad"), l.score + " 分"));
+      }
+      if (s.unlocked) {
+        const b = el("button", l.score != null ? "ghost" : "", l.score != null ? "再做一遍" : "去做实验");
+        b.onclick = () => goLab(l.id);
+        row.appendChild(b);
+      }
+      lw.appendChild(row);
+    });
+    d.appendChild(lw);
+
+    if (s.quizTotal) {
+      const q = el("div", "quizrow");
+      q.appendChild(el("span", null, `速练 ${s.quizDone}/${s.quizTotal} 题答对`));
+      if (s.unlocked) {
+        const b = el("button", null, "去刷题");
+        b.onclick = () => goQuiz();
+        q.appendChild(b);
+      }
+      d.appendChild(q);
+    }
+
+    box.appendChild(d);
+  });
+}
+
+async function api(p, b) {
+  const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
+  return (await fetch(p, o)).json();
+}
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+setTheme(localStorage.getItem("theme") || "apple");
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,352 @@
+{
+  "title": "跨交换机 VLAN 互通",
+  "subtitle": "两台交换机划 VLAN 10，Trunk 放行，PC 互 ping 通",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "VLAN",
+    "Trunk",
+    "Access"
+  ],
+  "intro": "在 SW1、SW2 上各自创建 VLAN 10，接 PC 的口做成 Access，中间互联口做成 Trunk 只放行 VLAN 10。最终两台 PC 处在同一个 VLAN 10 广播域里能互相 ping 通，并且你能用 display port vlan 一眼看出每根线的 Tagged / Untagged 关系。",
+  "devices": [
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 300,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 350,
+      "y": 300
+    },
+    {
+      "name": "SW2",
+      "model": "S5700",
+      "x": 600,
+      "y": 300
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "x": 850,
+      "y": 300,
+      "ip": "192.168.10.20",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW1",
+      "aPort": "GE0/0/24",
+      "b": "SW2",
+      "bPort": "GE0/0/24"
+    },
+    {
+      "a": "PC2",
+      "aPort": "GE0/0/0",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改两台交换机主机名",
+      "brief": "把两台 S5700 分别命名成 SW1、SW2。",
+      "why": "现场配错设备是常事，主机名是第一道防呆；后面所有 check 也是靠 sysname 认设备。",
+      "hints": [
+        "现在提示符是 <Huawei>，用户视图下改不了配置，先想办法进系统视图。",
+        "system-view 进系统视图，sysname SW1 一条命令搞定，敲完用 return 回用户视图。",
+        "SW1：\nsystem-view\nsysname SW1\nreturn\n\nSW2 上把 sysname 换成 SW2，其余一样。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "sysname SW2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "两端都创建 VLAN 10",
+      "brief": "SW1 和 SW2 上各创建 VLAN 10，VLAN ID 必须完全一致。",
+      "why": "VLAN 是本地有效的，两端都得有。只有一端有 VLAN 10，报文过 Trunk 到对端会被当成未知 VLAN 直接丢弃，表现为单通或不通。",
+      "hints": [
+        "创建 VLAN 在系统视图下，一条命令就能建，不用进 vlan 视图再写 name。",
+        "system-view 之后敲 vlan 10，建完 quit 退回系统视图。两台交换机都要建。",
+        "SW1：\nsystem-view\nvlan 10\nquit\nreturn\n\nSW2 上同样操作一遍。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vlan 10",
+          "expect": "VLAN ID: 10"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display vlan 10",
+          "expect": "VLAN ID: 10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "vlan 10",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "SW1 接 PC1 的口划进 VLAN 10",
+      "brief": "SW1 的 GE0/0/1 设成 Access，PVID 10，顺手写 description。",
+      "why": "PC 网卡不认 802.1Q tag，接入口必须是 Access，交换机收包后按 PVID 打上 VLAN 10 的标签，PC 侧完全无感。",
+      "hints": [
+        "先进 GE0/0/1 接口视图，把链路类型改成 access，再用 port default vlan 把它划进 VLAN 10。",
+        "interface GigabitEthernet0/0/1 → port link-type access → port default vlan 10，顺手加 description to-PC1。",
+        "system-view\ninterface GigabitEthernet0/0/1\ndescription to-PC1\nport link-type access\nport default vlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/1",
+          "expect": "port default vlan 10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-PC1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "SW2 接 PC2 的口划进 VLAN 10",
+      "brief": "SW2 的 GE0/0/1 设成 Access，PVID 10，写 description。",
+      "why": "两端接入口的 PVID 必须同为 10，否则 PC1 和 PC2 实际落在两个不同的广播域，ping 一定不通。",
+      "hints": [
+        "SW1 上怎么做的，SW2 上照做一遍，接口号也是 GE0/0/1。",
+        "interface GigabitEthernet0/0/1 → port link-type access → port default vlan 10，description to-PC2。",
+        "system-view\ninterface GigabitEthernet0/0/1\ndescription to-PC2\nport link-type access\nport default vlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/1",
+          "expect": "port default vlan 10"
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-PC2",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "SW1 互联口配 Trunk",
+      "brief": "SW1 的 GE0/0/24 设成 Trunk，只放行 VLAN 10。",
+      "why": "Trunk 口会给每个 VLAN 打 802.1Q tag 再转发。现场习惯只放行在用的 VLAN，别图省事 allow-pass vlan all，广播泛洪会顺着 Trunk 扩散到对端。",
+      "hints": [
+        "进 GE0/0/24 接口视图，先把链路类型切成 trunk，再指定允许通过的 VLAN。",
+        "interface GigabitEthernet0/0/24 → port link-type trunk → port trunk allow-pass vlan 10。",
+        "system-view\ninterface GigabitEthernet0/0/24\ndescription to-SW2\nport link-type trunk\nport trunk allow-pass vlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/24",
+          "expect": "port trunk allow-pass vlan 10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/24",
+          "description to-SW2",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "SW2 互联口配 Trunk",
+      "brief": "SW2 的 GE0/0/24 也设成 Trunk，放行 VLAN 10。",
+      "why": "Trunk 是两端协商的事：一端 trunk、一端还停在默认 hybrid，VLAN 10 依然过不去，两根线两头必须成对配。",
+      "hints": [
+        "SW1 的互联口怎么配的，SW2 上对 GE0/0/24 同样来一遍。",
+        "interface GigabitEthernet0/0/24 → port link-type trunk → port trunk allow-pass vlan 10。",
+        "system-view\ninterface GigabitEthernet0/0/24\ndescription to-SW1\nport link-type trunk\nport trunk allow-pass vlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration interface GigabitEthernet0/0/24",
+          "expect": "port trunk allow-pass vlan 10"
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "system-view",
+          "interface GigabitEthernet0/0/24",
+          "description to-SW1",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "核对两端端口类型",
+      "brief": "两台交换机都敲 display port vlan，确认 GE0/0/1 是 access、GE0/0/24 是 trunk。",
+      "why": "配完不核对最容易踩的坑就是只配了一端，业务照样不通；先看状态再 ping，排障顺序不能反。",
+      "hints": [
+        "有一条命令能同时看到接口的链路类型、PVID 和 Trunk 放行列表，就在用户视图下敲。",
+        "display port vlan，重点看 GE0/0/1 的 Link Type / PVID 和 GE0/0/24 的 Link Type。",
+        "display port vlan"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display port vlan",
+          "expect": "trunk"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display port vlan",
+          "expect": "trunk"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display port vlan"
+        ],
+        "SW2": [
+          "display port vlan"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "给两台交换机一个验证用源地址",
+      "brief": "SW1 建 Vlanif10 配 192.168.10.1/24，SW2 建 Vlanif10 配 192.168.10.2/24。",
+      "why": "交换机自己要发起 ping，必须有一个落在 VLAN 10 网段的三层口当源地址，否则报文发不出去。这里只是为了验证，跟跨 VLAN 路由不是一回事。",
+      "hints": [
+        "接口视图里直接 interface Vlanif 10 就能建三层口，地址配在 192.168.10.0/24 里。",
+        "interface Vlanif 10 → ip address 192.168.10.1 24；SW2 用 .2，注意别和 PC 的 .10/.20 撞。",
+        "SW1：\nsystem-view\ninterface Vlanif 10\nip address 192.168.10.1 24\nquit\nreturn\n\nSW2 上同样的接口，地址写 192.168.10.2 24。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif 10",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface Vlanif 10",
+          "ip address 192.168.10.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "从 SW1 ping PC2 验证跨交换机互通",
+      "brief": "在 SW1 用户视图 ping 192.168.10.20，四包全通；顺手在 PC1 命令行 ping 一次 PC2。",
+      "why": "SW1 到 PC2 的流量走的是 Access 入、Trunk 打 tag 出、对端 Access 去 tag 再送 PC 这条完整路径，通了说明 VLAN 划分、Trunk 放行、PVID 全对。ping 之前先确认两台 PC 在 eNSP 里已经启动，PC 网卡 down 了接入口跟着 down，Vlanif 也起不来。",
+      "hints": [
+        "在交换机用户视图直接 ping，别在系统视图里敲；PC 那台在 eNSP 里点开命令行也能 ping。",
+        "ping -c 4 192.168.10.20，看最后的丢包率是不是 0.00%。",
+        "ping -c 4 192.168.10.20"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "ping -c 4 192.168.10.20",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -c 4 192.168.10.20"
+        ]
+      }
+    }
+  ],
+  "id": "vlan-cross",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台交换机跨交换机 VLAN 互通，接 PC，划 VLAN 10，Trunk 放行，验证跨交换机同 VLAN 能通"
+}

@@ -1,0 +1,39 @@
+{
+  "title": "端口安全误伤",
+  "level": "HCIA",
+  "cat": "安全",
+  "symptom": "接 PC 的接口开启端口安全后，PC 一开机接口就变为 err-down，无法通信。",
+  "topology": "flowchart LR\n  PC[PC] -->|GE0/0/1| SW1[SW1 S5700]\n  SW1 -->|GE0/0/2| SW2[SW2 S5700]",
+  "shows": [
+    {
+      "dev": "SW1",
+      "cmd": "display port-security interface GigabitEthernet0/0/1",
+      "output": "Port Security: enabled\nPort Status: error-down\nMax MAC Address Number: 1\nCurrent MAC Address Number: 0\nProtect Action: shutdown\nSticky MAC: disabled\nAging Time: 0\nViolation Count: 1"
+    },
+    {
+      "dev": "SW1",
+      "cmd": "display interface GigabitEthernet0/0/1",
+      "output": "GigabitEthernet0/0/1 current state : ERROR DOWN\nLine protocol current state : DOWN\nPort Security: enabled\nPort Mode: access\nReason: port-security violation"
+    }
+  ],
+  "options": [
+    {
+      "label": "端口安全的违规动作配置为 shutdown，学习到额外 MAC 即触发 err-down",
+      "ok": true
+    },
+    {
+      "label": "接口未配置 port-security enable，端口安全未生效",
+      "ok": false
+    },
+    {
+      "label": "PC 网卡故障导致接口物理 down",
+      "ok": false
+    },
+    {
+      "label": "接口被配置为 trunk 模式，无法学习 MAC",
+      "ok": false
+    }
+  ],
+  "explain": "回显中 Protect Action 为 shutdown，PC 开机时接口先学到网关或自身 MAC，再出现新 MAC 即判违规并 err-down。将违规动作改为 restrict 或 protect，或用 display port-security interface 查看 Protect Action 确认。",
+  "id": "qz-port-sec"
+}

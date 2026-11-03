@@ -1,0 +1,380 @@
+{
+  "title": "Vlanif 间路由实验",
+  "subtitle": "三层交换机用 Vlanif 实现 VLAN 间互通",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "VLAN",
+    "Trunk",
+    "Vlanif"
+  ],
+  "intro": "两台接入交换机分别划 VLAN 10 和 VLAN 20，通过 Trunk 上联到三层交换机，在 Vlanif 上配网关，最终 PC 互 ping 通。",
+  "devices": [
+    {
+      "name": "SW-CORE",
+      "model": "S5700",
+      "x": 400,
+      "y": 200
+    },
+    {
+      "name": "SW-ACC1",
+      "model": "S3700",
+      "x": 200,
+      "y": 400
+    },
+    {
+      "name": "SW-ACC2",
+      "model": "S3700",
+      "x": 600,
+      "y": 400
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 550,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "x": 700,
+      "y": 550,
+      "ip": "192.168.20.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.20.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "SW-CORE",
+      "aPort": "GE0/0/1",
+      "b": "SW-ACC1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW-CORE",
+      "aPort": "GE0/0/2",
+      "b": "SW-ACC2",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "SW-ACC1",
+      "aPort": "Ethernet0/0/1",
+      "b": "PC1",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "SW-ACC2",
+      "aPort": "Ethernet0/0/1",
+      "b": "PC2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "修改主机名",
+      "brief": "把三台交换机分别改名为 SW-CORE、SW-ACC1、SW-ACC2。",
+      "why": "现场设备多，不改名后面看配置容易串，按机房命名规范来。",
+      "hints": [
+        "先 system-view 进系统视图，再改 sysname。",
+        "system-view 然后 sysname 新名字。",
+        "SW-CORE：\nsystem-view\nsysname SW-CORE\nreturn\n\nSW-ACC1：\nsystem-view\nsysname SW-ACC1\nreturn\n\nSW-ACC2：\nsystem-view\nsysname SW-ACC2\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW-CORE"
+        },
+        {
+          "dev": "SW-ACC1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW-ACC1"
+        },
+        {
+          "dev": "SW-ACC2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW-ACC2"
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "system-view",
+          "sysname SW-CORE",
+          "return"
+        ],
+        "SW-ACC1": [
+          "system-view",
+          "sysname SW-ACC1",
+          "return"
+        ],
+        "SW-ACC2": [
+          "system-view",
+          "sysname SW-ACC2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "创建 VLAN",
+      "brief": "SW-CORE 创建 VLAN 10 和 20，SW-ACC1 创建 VLAN 10，SW-ACC2 创建 VLAN 20。",
+      "why": "VLAN 必须先创建，后面划接口和配 Vlanif 才有意义。",
+      "hints": [
+        "在系统视图下用 vlan 命令批量创建。",
+        "vlan batch 10 20 可以一次建两个。",
+        "SW-CORE：\nsystem-view\nvlan batch 10 20\nreturn\n\nSW-ACC1：\nsystem-view\nvlan batch 10\nreturn\n\nSW-ACC2：\nsystem-view\nvlan batch 20\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "display vlan brief",
+          "expect": "10"
+        },
+        {
+          "dev": "SW-ACC1",
+          "cmd": "display vlan brief",
+          "expect": "10"
+        },
+        {
+          "dev": "SW-ACC2",
+          "cmd": "display vlan brief",
+          "expect": "20"
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "system-view",
+          "vlan batch 10 20",
+          "return"
+        ],
+        "SW-ACC1": [
+          "system-view",
+          "vlan batch 10",
+          "return"
+        ],
+        "SW-ACC2": [
+          "system-view",
+          "vlan batch 20",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "接入交换机划接口 VLAN",
+      "brief": "SW-ACC1 的 Ethernet0/0/1 划入 VLAN 10，SW-ACC2 的 Ethernet0/0/1 划入 VLAN 20。",
+      "why": "接 PC 的接口用 access 模式，打上对应 VLAN 标签，PC 才能进对 VLAN。",
+      "hints": [
+        "进接口视图，先 port link-type access，再 port default vlan。",
+        "interface Ethernet0/0/1 然后 port link-type access 和 port default vlan 10。",
+        "SW-ACC1：\nsystem-view\ninterface Ethernet0/0/1\nport link-type access\nport default vlan 10\nquit\nreturn\n\nSW-ACC2：\nsystem-view\ninterface Ethernet0/0/1\nport link-type access\nport default vlan 20\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-ACC1",
+          "cmd": "display vlan brief",
+          "expect": "UT:Eth0/0/1"
+        },
+        {
+          "dev": "SW-ACC2",
+          "cmd": "display vlan brief",
+          "expect": "UT:Eth0/0/1"
+        }
+      ],
+      "apply": {
+        "SW-ACC1": [
+          "system-view",
+          "interface Ethernet0/0/1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ],
+        "SW-ACC2": [
+          "system-view",
+          "interface Ethernet0/0/1",
+          "port link-type access",
+          "port default vlan 20",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配置 Trunk 上联",
+      "brief": "SW-ACC1 和 SW-ACC2 的 GE0/0/1 配成 Trunk 并允许对应 VLAN 通过。",
+      "why": "上联口要透传多个 VLAN 的标签，必须用 Trunk，否则 VLAN 10/20 的帧到不了核心。",
+      "hints": [
+        "进接口视图，port link-type trunk，再 port trunk allow-pass vlan。",
+        "interface GigabitEthernet0/0/1 然后 port link-type trunk 和 port trunk allow-pass vlan 10。",
+        "SW-ACC1：\nsystem-view\ninterface GigabitEthernet0/0/1\nport link-type trunk\nport trunk allow-pass vlan 10\nquit\nreturn\n\nSW-ACC2：\nsystem-view\ninterface GigabitEthernet0/0/1\nport link-type trunk\nport trunk allow-pass vlan 20\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-ACC1",
+          "cmd": "display port vlan",
+          "expect": "trunk"
+        },
+        {
+          "dev": "SW-ACC2",
+          "cmd": "display port vlan",
+          "expect": "trunk"
+        }
+      ],
+      "apply": {
+        "SW-ACC1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 10",
+          "quit",
+          "return"
+        ],
+        "SW-ACC2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 20",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "核心交换机下联口配 Trunk",
+      "brief": "SW-CORE 的 GE0/0/1 和 GE0/0/2 都配成 Trunk，允许 VLAN 10 和 20 通过。",
+      "why": "核心侧下联口也要 Trunk 并放行两个 VLAN，否则标签被丢弃，VLAN 间无法路由。",
+      "hints": [
+        "两个接口分别进接口视图配 trunk 和 allow-pass。",
+        "interface GigabitEthernet0/0/1 和 GigabitEthernet0/0/2 都要配。",
+        "SW-CORE：\nsystem-view\ninterface GigabitEthernet0/0/1\nport link-type trunk\nport trunk allow-pass vlan 10 20\nquit\ninterface GigabitEthernet0/0/2\nport link-type trunk\nport trunk allow-pass vlan 10 20\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "display port vlan",
+          "expect": "trunk"
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 10 20",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "port link-type trunk",
+          "port trunk allow-pass vlan 10 20",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "配置 Vlanif 网关地址",
+      "brief": "SW-CORE 上创建 Vlanif10 配 192.168.10.1/24，Vlanif20 配 192.168.20.1/24。",
+      "why": "Vlanif 是三层接口，PC 的网关指向它，跨 VLAN 流量才能被路由。",
+      "hints": [
+        "interface Vlanif10 进三层接口，ip address 配地址。",
+        "interface Vlanif10 然后 ip address 192.168.10.1 24。",
+        "SW-CORE：\nsystem-view\ninterface Vlanif10\nip address 192.168.10.1 24\nquit\ninterface Vlanif20\nip address 192.168.20.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.1"
+        },
+        {
+          "dev": "SW-CORE",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.20.1"
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "system-view",
+          "interface Vlanif10",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "interface Vlanif20",
+          "ip address 192.168.20.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "验证 VLAN 内互通",
+      "brief": "从 SW-CORE ping 192.168.10.10 和 192.168.20.10，确认两个 PC 都能通。",
+      "why": "先确认二层和网关地址没问题，再验证跨 VLAN 路由，排错有层次。",
+      "hints": [
+        "在 SW-CORE 用户视图直接 ping PC 地址。",
+        "ping -c 4 192.168.10.10 和 ping -c 4 192.168.20.10。",
+        "ping -c 4 192.168.10.10\nping -c 4 192.168.20.10"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "ping -c 4 192.168.10.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "SW-CORE",
+          "cmd": "ping -c 4 192.168.20.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "ping -c 4 192.168.10.10",
+          "ping -c 4 192.168.20.10"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "验证跨 VLAN 互通",
+      "brief": "从 PC1 ping PC2 的地址 192.168.20.10，四包全通。",
+      "why": "PC 之间能通说明 Vlanif 路由生效，这是本实验的最终目标。",
+      "hints": [
+        "PC 没有命令行，在 eNSP 里双击 PC1 打开命令行窗口执行 ping。",
+        "PC1 命令行输入 ping 192.168.20.10。",
+        "PC1：\nping 192.168.20.10"
+      ],
+      "check": [
+        {
+          "dev": "SW-CORE",
+          "cmd": "ping -c 4 192.168.20.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW-CORE": [
+          "ping -c 4 192.168.20.10"
+        ]
+      }
+    }
+  ],
+  "id": "vlanif-route",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "三层交换机用 Vlanif 做 VLAN 间路由，两台接入交换机各划 VLAN 10 和 VLAN 20，PC 分属两个 VLAN，最后互 ping 通",
+  "syllabus": [
+    "HCIA-Datacom 2.2 三层转发",
+    "HCIA-Datacom 3.2 VLAN 间通信"
+  ]
+}

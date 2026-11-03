@@ -1,0 +1,45 @@
+{
+  "id": "wlan",
+  "title": "WLAN 组网与 CAPWAP 隧道",
+  "level": "HCIA",
+  "cat": "广域",
+  "keys": [
+    "WLAN",
+    "CAPWAP",
+    "AC",
+    "AP",
+    "无线接入点",
+    "隧道"
+  ],
+  "one": "WLAN 组网通过 CAPWAP 隧道集中管理 AP，实现无线接入。",
+  "analogy": "就像一个大公司，总部（AC）统一管理各个分部（AP）。分部员工（无线终端）要访问公司资源，先通过专用通道（CAPWAP 隧道）把请求送到总部，总部再统一处理。这样总部能集中控制，分部不用自己搞一套复杂系统。",
+  "body": "## 为什么需要 CAPWAP\n\n传统 WLAN 中，AP 是胖 AP（FAT AP），每个 AP 独立配置、独立管理，当 AP 数量多时，配置、安全策略、漫游等难以统一。为此，出现了瘦 AP（FIT AP）架构，由 AC（Access Controller）集中管理多个 AP。AC 与 AP 之间需要一种控制协议，CAPWAP（Control And Provisioning of Wireless Access Points）应运而生。\n\nCAPWAP 是一个通用隧道协议，基于 UDP，定义了两类报文：控制报文（CAPWAP Control）和数据报文（CAPWAP Data）。控制报文用于 AC 对 AP 的配置下发、状态维护；数据报文用于封装无线用户的数据帧，在 AC 与 AP 之间传输。\n\n## CAPWAP 协议栈与报文格式\n\nCAPWAP 报文封装在 UDP 之上，控制报文使用 UDP 端口 5246，数据报文使用 UDP 端口 5247。CAPWAP 报文头包括：\n\n- **Version**：版本号，当前为 0。\n- **Type**：报文类型，控制报文为 0，数据报文为 1。\n- **Flags**：标志位，如 T 位表示隧道报文。\n- **Fragment ID**：分片标识。\n- **Length**：报文长度。\n- **Sequence Number**：序列号。\n- **Payload**：载荷，控制报文包含 CAPWAP 控制消息，数据报文包含无线数据帧。\n\n控制消息进一步分为多种类型，如 Discovery Request/Response、Join Request/Response、Configuration Status Request/Response、Change State Event Request 等。\n\n## AP 上线流程\n\nAP 上电后，需要经过以下阶段才能与 AC 建立隧道：\n\n1. **AP 发现阶段**：AP 通过 DHCP 获取 IP 地址，并获取 AC 的 IP 地址（通过 DHCP Option 43、DNS 或静态配置）。然后 AP 发送 Discovery Request 报文（广播或单播）寻找 AC，AC 回复 Discovery Response。\n2. **CAPWAP 隧道建立阶段**：AP 选择 AC 后，发送 Join Request，AC 回复 Join Response，双方建立控制隧道。\n3. **配置同步阶段**：AC 通过 Configuration Status Request 下发配置给 AP，AP 回复 Configuration Status Response。\n4. **数据隧道建立阶段**：AP 发送 Change State Event Request 通知 AC 进入运行状态，AC 回复 Change State Event Response。此时数据隧道也建立完成。\n\n## 数据转发模式\n\nCAPWAP 支持两种数据转发模式：\n\n- **隧道转发（Tunnel Mode）**：用户数据封装在 CAPWAP 数据报文中，通过 AC 转发。优点是安全策略集中、漫游切换快；缺点是 AC 成为流量瓶颈。\n- **直接转发（Direct Forward）**：用户数据不经过 AC，AP 直接将数据转发到上层网络。优点是减轻 AC 负担；缺点是安全策略需在 AP 或上层设备部署。\n\n## 与相邻技术的分工\n\n- **CAPWAP 与 DHCP**：DHCP 用于 AP 获取 IP 地址和 AC 地址（Option 43），是 AP 发现 AC 的前提。\n- **CAPWAP 与 802.11**：802.11 是无线空口协议，负责终端与 AP 之间的通信；CAPWAP 是 AP 与 AC 之间的隧道协议，两者协同工作。\n- **CAPWAP 与 VXLAN**：VXLAN 用于数据中心大二层，CAPWAP 专用于 WLAN 管理，二者领域不同。\n\n## 设计取舍\n\nCAPWAP 选择 UDP 而非 TCP，是为了降低协议开销，提高实时性；但 UDP 不保证可靠性，因此 CAPWAP 自身通过序列号、重传机制（控制报文）来保证可靠性。隧道转发模式集中管理但可能成为性能瓶颈，直接转发模式性能好但管理分散，实际部署需根据规模选择。",
+  "cmds": [
+    "display ap all",
+    "display capwap configuration",
+    "display wlan config",
+    "display ap online-fail-record all"
+  ],
+  "pits": [
+    "AP 无法获取 AC 地址：检查 DHCP Option 43 或 DNS 配置",
+    "CAPWAP 隧道建立失败：检查 UDP 5246/5247 端口是否被防火墙拦截",
+    "AP 版本与 AC 不匹配：需确保 AP 加载与 AC 兼容的固件",
+    "直接转发模式下业务 VLAN 未放行：检查 AP 上行端口 Trunk 配置",
+    "AC 性能不足导致隧道转发丢包：考虑改为直接转发或扩容 AC"
+  ],
+  "qa": [
+    {
+      "q": "CAPWAP 协议的作用是什么？",
+      "a": "CAPWAP 用于 AC 与 AP 之间的通信，实现 AP 的集中管理、配置下发和用户数据隧道传输。"
+    },
+    {
+      "q": "AP 如何发现 AC？",
+      "a": "AP 可通过 DHCP Option 43、DNS 解析或静态配置获取 AC 的 IP 地址，然后发送 Discovery Request 报文。"
+    },
+    {
+      "q": "CAPWAP 隧道转发和直接转发的区别？",
+      "a": "隧道转发用户数据经 AC 转发，集中安全策略但 AC 压力大；直接转发用户数据由 AP 直接转发，减轻 AC 负担但策略分散。"
+    }
+  ],
+  "syllabus": "HCIA-WLAN"
+}

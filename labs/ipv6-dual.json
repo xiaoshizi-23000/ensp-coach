@@ -1,0 +1,423 @@
+{
+  "title": "双栈OSPF与OSPFv3",
+  "subtitle": "两台路由器同时跑IPv4 OSPF和IPv6 OSPFv3并验证双栈互通",
+  "level": "进阶",
+  "minutes": 30,
+  "tags": [
+    "OSPF",
+    "OSPFv3",
+    "IPv6",
+    "双栈"
+  ],
+  "intro": "两台AR1220各配IPv4/IPv6双栈地址，IPv4侧用OSPF、IPv6侧用OSPFv3，最后两个协议族各自ping通对端。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 520,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "两台路由器分别改名为 AR1、AR2。",
+      "why": "现场设备多，主机名是排障时第一眼确认设备身份的依据，先改名再配别的。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 后用 sysname 改名字。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2 换成 sysname AR2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配IPv4互联地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，AR2 配 10.0.12.2/24。",
+      "why": "OSPF 的 router-id 和邻居建立都依赖 IPv4 地址，双栈实验里 IPv4 侧必须先通。",
+      "hints": [
+        "进接口视图配地址，顺手加 description 标注对端。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址，description 写对端。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\ndescription to-AR2\nip address 10.0.12.1 24\nquit\nreturn\n\nAR2 换成 10.0.12.2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR2",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR1",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配IPv6互联地址",
+      "brief": "同一接口上再配 IPv6 地址，AR1 用 2001:12::1/64，AR2 用 2001:12::2/64。",
+      "why": "双栈就是同一接口同时挂 v4 和 v6 地址，IPv6 侧不配地址 OSPFv3 无从谈起。",
+      "hints": [
+        "还在 GE0/0/0 接口视图里，IPv6 地址用 ipv6 address 配。",
+        "interface GigabitEthernet0/0/0 下敲 ipv6 address 2001:12::1 64。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\nipv6 address 2001:12::1 64\nquit\nreturn\n\nAR2 换成 2001:12::2 64。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ipv6 interface brief",
+          "expect": "2001:12::1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ipv6 interface brief",
+          "expect": "2001:12::2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ipv6 address 2001:12::1 64",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ipv6 address 2001:12::2 64",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "全局开启IPv6",
+      "brief": "两台路由器在系统视图下开启 IPv6 转发能力。",
+      "why": "VRP 默认不转发 IPv6 报文，不敲 ipv6 这条全局开关，接口地址能配但 ping 不通。",
+      "hints": [
+        "在系统视图下有一条全局 IPv6 开关命令。",
+        "system-view 后敲 ipv6，一条命令即可。",
+        "AR1：\nsystem-view\nipv6\nreturn\n\nAR2 同样操作。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include ipv6",
+          "expect": "ipv6"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include ipv6",
+          "expect": "ipv6"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ipv6",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ipv6",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "验证双栈直连",
+      "brief": "从 AR1 分别 ping AR2 的 IPv4 和 IPv6 地址。",
+      "why": "路由协议之前先确认底层直连通，否则 OSPF 邻居起不来时你分不清是地址问题还是协议问题。",
+      "hints": [
+        "ping IPv4 用 ping -c 4，ping IPv6 用 ping ipv6 -c 4。",
+        "ping -c 4 10.0.12.2 和 ping ipv6 -c 4 2001:12::2 各来一次。",
+        "ping -c 4 10.0.12.2\nping ipv6 -c 4 2001:12::2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping ipv6 -c 4 2001:12::2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2",
+          "ping ipv6 -c 4 2001:12::2"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "起OSPF进程",
+      "brief": "两台路由器各起 OSPF 进程 1，router-id 用各自的 IPv4 地址。",
+      "why": "router-id 必须手工指定且唯一，现场不指定容易选到 Loopback 或随机接口地址，排障时对不上号。",
+      "hints": [
+        "系统视图下 ospf 1 router-id x.x.x.x 一条命令搞定。",
+        "ospf 1 router-id 10.0.12.1，AR2 用 10.0.12.2。",
+        "AR1：\nsystem-view\nospf 1 router-id 10.0.12.1\nquit\nreturn\n\nAR2 换成 router-id 10.0.12.2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ospf brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ospf 1 router-id 10.0.12.1",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ospf 1 router-id 10.0.12.2",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "宣告IPv4网段",
+      "brief": "在 OSPF 区域 0 里宣告 10.0.12.0/24。",
+      "why": "OSPF 只对 network 宣告的网段生效，接口配了地址不等于进了 OSPF。",
+      "hints": [
+        "进 ospf 视图，area 0 下用 network 加反掩码宣告。",
+        "ospf 1 下 area 0，network 10.0.12.0 0.0.0.255。",
+        "AR1：\nsystem-view\nospf 1\narea 0\nnetwork 10.0.12.0 0.0.0.255\nquit\nquit\nreturn\n\nAR2 同样宣告。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ospf 1",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "quit",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ospf 1",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "起OSPFv3进程",
+      "brief": "两台路由器各起 OSPFv3 进程 1，router-id 复用 IPv4 地址。",
+      "why": "OSPFv3 是独立进程，和 OSPFv2 互不相干；router-id 仍是 32 位格式，习惯上沿用 IPv4 地址。",
+      "hints": [
+        "系统视图下 ospfv3 1 起进程，router-id 单独指定。",
+        "ospfv3 1 进进程，router-id 10.0.12.1。",
+        "AR1：\nsystem-view\nospfv3 1\nrouter-id 10.0.12.1\nquit\nreturn\n\nAR2 换成 router-id 10.0.12.2。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospfv3",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ospfv3",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ospfv3 1",
+          "router-id 10.0.12.1",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "ospfv3 1",
+          "router-id 10.0.12.2",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "接口启用OSPFv3",
+      "brief": "在 GE0/0/0 接口下把 OSPFv3 挂到区域 0。",
+      "why": "OSPFv3 是按接口启用的，不像 OSPFv2 用 network 宣告，接口不挂进程邻居永远起不来。",
+      "hints": [
+        "进接口视图，用 ospfv3 1 area 0 把接口挂进进程。",
+        "interface GigabitEthernet0/0/0 下敲 ospfv3 1 area 0。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\nospfv3 1 area 0\nquit\nreturn\n\nAR2 同样操作。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospfv3 peer",
+          "expect": "Full"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ospfv3 peer",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospfv3 1 area 0",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospfv3 1 area 0",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "双栈路由验证",
+      "brief": "查两张路由表，再从 AR1 分别 ping 对端 v4 和 v6 地址。",
+      "why": "邻居 Full 只说明协议起来了，路由表里有 OSPF 学到的条目、ping 通对端，才算双栈真正互通。",
+      "hints": [
+        "display ip routing-table 看 IPv4，display ipv6 routing-table 看 IPv6，再各 ping 一次。",
+        "两条 display 确认有 OSPF 路由，然后 ping -c 4 和 ping ipv6 -c 4。",
+        "display ip routing-table\ndisplay ipv6 routing-table\nping -c 4 10.0.12.2\nping ipv6 -c 4 2001:12::2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table",
+          "expect": "10.0.12.0/24"
+        },
+        {
+          "dev": "AR1",
+          "cmd": "display ipv6 routing-table",
+          "expect": "2001:12::/64"
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping ipv6 -c 4 2001:12::2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip routing-table",
+          "display ipv6 routing-table",
+          "ping -c 4 10.0.12.2",
+          "ping ipv6 -c 4 2001:12::2"
+        ]
+      }
+    }
+  ],
+  "id": "ipv6-dual",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器跑双栈，IPv4 用 OSPF、IPv6 用 OSPFv3，验证两个协议族都互通"
+}

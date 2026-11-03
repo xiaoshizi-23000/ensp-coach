@@ -1,0 +1,52 @@
+{
+  "id": "srv6",
+  "title": "SRv6 分段路由原理",
+  "level": "HCIE",
+  "cat": "自动化",
+  "keys": [
+    "SRv6",
+    "Segment Routing over IPv6",
+    "SRH",
+    "Segment List",
+    "Locator",
+    "End.DT4",
+    "End.X",
+    "TE"
+  ],
+  "one": "用 IPv6 扩展头承载段列表，在 IPv6 数据面实现源路由的隧道技术",
+  "analogy": "传统 MPLS 像坐地铁要一站站换乘，每站都得看指示牌（每跳查标签）；SRv6 像出发前就把整条路线写在一张行程单上，塞进信封（SRH）里，沿途每个站只按行程单上的下一站名走，不用自己算路。行程单上的站名就是 IPv6 地址，所以不需要额外发明一套编号体系，网络里现成的 IPv6 转发能力就能用。",
+  "body": "## 为什么需要 SRv6\n\nMPLS TE 的问题在于：标签是本地有意义、全局无意义的，路径信息分散在每台设备的标签转发表里，端到端路径难以表达，跨域拼接困难，而且标签栈与 IPv6 数据面是两套体系。SRv6 的核心思路是**把路径编码进报文本身**：源节点把一串 IPv6 地址（Segment List）压进报文，中间节点只按当前段做转发，不再维护逐跳的路径状态。这样网络中间设备保持无状态，路径计算和业务意图全部收敛到边缘。\n\n它同时继承了 SR（Segment Routing）的两个关键性质：\n\n- **源路由**：路径由头端决定，中间节点不参与选路决策。\n- **无状态**：中间节点不需要为每条隧道维护状态，天然支持 ECMP 和任意拓扑变化。\n\n## 基本概念\n\n### SID 与 Locator\n\nSRv6 SID 是一个 128 bit 的 IPv6 地址，但它的语义由**定位（Locator）+ 功能（Function）+ 参数（Argument）**三段构成：\n\n| 部分 | 作用 |\n|---|---|\n| Locator | 路由可达前缀，保证报文能被路由到该节点 |\n| Function | 该 SID 在本节点执行的行为，如 End、End.X、End.DT4 |\n| Argument | 可选参数，如 VPN 实例标识、出接口索引 |\n\nLocator 通过 IGP 泛洪，因此 SID 天然具备可达性，不需要额外的标签分发协议。这是 SRv6 相对 MPLS SR 最大的简化：**控制面复用 IPv6 路由，不再需要 LDP/RSVP/BGP-LU 分发标签**。\n\n### 常见 Endpoint Behavior\n\n| Behavior | 含义 |\n|---|---|\n| End | 基本端点行为，SL--，按 SL 取下一 SID 转发 |\n| End.X | 指定出接口的 End，用于显式路径 |\n| End.DT4 / End.DT6 | 解封装并查指定 VRF 表转发，用于 L3VPN |\n| End.DX4 / End.DX6 | 解封装并从指定接口转发，用于 L2/L3 交叉 |\n| End.B6.Encaps | 绑定 SRH 并封装，用于流量引导 |\n| End.T | 查指定路由表转发 |\n\nFunction 段由厂商在 Locator 内分配，通常用 Locator 的低位或独立子块表示，配置时以 `opcode` 形式绑定。\n\n## 报文格式：SRH\n\nSRv6 使用 IPv6 扩展头 **SRH（Segment Routing Header，路由类型 4）** 承载段列表。关键字段：\n\n- **Next Header**：指向下一个扩展头或上层协议。\n- **Hdr Ext Len**：SRH 长度。\n- **Routing Type = 4**：标识这是 SRH。\n- **Segments Left (SL)**：剩余未处理的段数，指针语义。\n- **Last Entry**：Segment List 的最后一个元素索引。\n- **Segment List[0..n]**：段列表，**逆序存放**，Segment List[0] 是路径最后一跳。\n- **TLV**：可选，如 HMAC 校验、OAM、绑定 SID 等。\n\n逆序存放是设计上的关键取舍：转发时只需递减 SL 并读取 `Segment List[SL]`，指针单调递减，处理逻辑最简单，且与 IPv6 目的地址的更新天然对齐。\n\n### 转发过程\n\n以路径 A→B→C→D 为例，A 为头端：\n\n1. A 计算路径，构造 Segment List = [D, C, B]（逆序），SL = 3。\n2. A 将 IPv6 目的地址设为 `Segment List[SL]`，即 B 的 SID，并封装 SRH。\n3. B 收到报文，目的地址命中本地 SID，执行对应 Behavior：SL--，将目的地址更新为 `Segment List[SL]`（即 C 的 SID），转发。\n4. C 同理，SL--，目的地址更新为 D 的 SID。\n5. D 收到时 SL = 0，执行末端 Behavior（如 End.DT4），剥离 SRH，查 VRF 转发到 CE。\n\n注意：**中间节点不修改 SRH 的 Segment List，只改 SL 和 IPv6 目的地址**，因此 SRH 本身在路径上保持不变，便于 OAM 和校验。\n\n## 控制面：SID 如何被通告\n\n- **IGP 扩展**：IS-IS/OSPFv3 通过 SRv6 Locator TLV 泛洪 Locator 前缀及端点行为，形成 SRv6 Locator 路由表。\n- **BGP**：BGP-LS 上报拓扑与 SID 给控制器；EVPN 场景下用 BGP 扩展团体携带 SID 用于 L3VPN 互通。\n- **控制器**：PCE/控制器基于 BGP-LS 拓扑和 SID 计算显式路径，通过 PCEP 或 BGP SR Policy 下发 Segment List。\n\n与 MPLS SR 对比：MPLS SR 需要 IGP 扩展分发 Prefix-SID（标签），SRv6 分发的是 IPv6 前缀，**控制面协议栈更统一，跨域拼接只需路由可达**。\n\n## 与相邻技术的分工\n\n| 技术 | 定位 | 与 SRv6 关系 |\n|---|---|---|\n| MPLS TE | 标签转发，逐跳状态 | SRv6 用源路由替代，中间无状态 |\n| SR-MPLS | MPLS 数据面的 SR | 控制面思想一致，数据面不同 |\n| VXLAN | 覆盖网络，无路径表达 | SRv6 可作 underlay 或替代 overlay |\n| Segment Routing Policy | 业务意图载体 | SRv6 是其数据面实现之一 |\n\nSRv6 的取舍很明确：**报文开销换状态简化**。SRH 使报文变长，对 MTU 和转发性能有要求；但换来的是中间节点零状态、端到端可编程、与 IPv6 生态无缝。\n\n## 设计取舍与工程要点\n\n1. **MTU**：SRH 增加 8 字节固定头 + 16 字节/段，路径 MTU 需预留，否则分片或丢包。\n2. **SID 压缩**：长路径导致 Segment List 过大，可用 **uSID（micro SID）** 或压缩 SID 把多个段压进一个 128 bit 地址，减少开销。\n3. **保护**：TI-LFA 结合 SRv6 可实现 50ms 级收敛，依赖 Locator 路由和备份 SID。\n4. **OAM**：SRH 中可带 OAM TLV，配合 IFIT 做逐跳检测，弥补源路由路径不可见的排障难点。\n5. **安全**：SRH 可被伪造，需在域边界做 SID 过滤，避免源路由被滥用。\n\n## 典型应用\n\n- **SRv6 BE**：仅用 Locator 做普通 IPv6 转发，无显式路径。\n- **SRv6 TE Policy**：控制器下发 Segment List，实现流量工程、路径约束。\n- **SRv6 L3VPN**：End.DT4 解封装查 VRF，替代 MPLS VPN。\n- **SRv6 随流检测**：结合 IFIT 做业务级 SLA 监控。",
+  "cmds": [
+    "display segment-routing ipv6 locator",
+    "display segment-routing ipv6 local-sid",
+    "display ipv6 routing-table",
+    "display segment-routing ipv6 te policy",
+    "tracert -a ipv6 <目的地址>"
+  ],
+  "pits": [
+    "SRH 增加报文长度，务必确认路径 MTU 与分片策略",
+    "Locator 未泛洪或冲突会导致 SID 不可达，先查 IGP",
+    "末端 Behavior 配错（DT4/DX4）会造成解封装后丢包",
+    "SL 与 Segment List 逆序关系易记反，排错时逐跳看目的地址",
+    "跨域时对端未支持 SRv6 会导致 SRH 被丢弃"
+  ],
+  "qa": [
+    {
+      "q": "SRv6 与 SR-MPLS 的核心区别是什么？",
+      "a": "数据面不同：SR-MPLS 用 MPLS 标签栈，SRv6 用 IPv6 地址+SRH；SRv6 无需标签分发协议，控制面复用 IPv6 路由，中间节点无状态，但报文开销更大。"
+    },
+    {
+      "q": "SRH 中 Segments Left 的作用？",
+      "a": "指示剩余未处理的段数，转发时递减并据此取 Segment List[SL] 更新目的地址，SL=0 时执行末端 Behavior。"
+    },
+    {
+      "q": "为什么 Segment List 要逆序存放？",
+      "a": "使 SL 单调递减即可顺序取段，处理逻辑最简，且与目的地址逐跳更新天然对齐。"
+    },
+    {
+      "q": "SRv6 如何实现 L3VPN？",
+      "a": "PE 上配置 End.DT4 SID，报文到达后剥离 SRH，按 SID 关联的 VRF 查表转发到 CE。"
+    }
+  ],
+  "syllabus": "HCIE-Datacom SRv6 技术（Segment Routing over IPv6）"
+}

@@ -1,0 +1,44 @@
+{
+  "title": "OSPF 邻居起不来",
+  "level": "HCIP",
+  "cat": "路由",
+  "symptom": "两台路由器直连，接口地址配置正常且物理链路正常，但 OSPF 邻居表始终为空，无法建立邻居关系。",
+  "topology": "flowchart LR\n  R1[R1 AR2220] ---|GE0/0/0| R2[R2 AR2220]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display ospf peer",
+      "output": "OSPF Process 1 with Router ID 1.1.1.1\n Neighbors\n Total: 0\n"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display ospf interface GigabitEthernet0/0/0",
+      "output": "Area: 0.0.0.1\n Interface: GigabitEthernet0/0/0\n State: DR\n Cost: 1\n"
+    },
+    {
+      "dev": "R2",
+      "cmd": "display ospf interface GigabitEthernet0/0/0",
+      "output": "Area: 0.0.0.0\n Interface: GigabitEthernet0/0/0\n State: DR\n Cost: 1\n"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 的 OSPF 区域 ID 和 R2 不一致",
+      "ok": true
+    },
+    {
+      "label": "R1 的接口地址掩码写错了",
+      "ok": false
+    },
+    {
+      "label": "R2 没有开启 OSPF",
+      "ok": false
+    },
+    {
+      "label": "两台设备的接口没有 up",
+      "ok": false
+    }
+  ],
+  "explain": "R1 接口属于 Area 0.0.0.1，R2 属于 Area 0.0.0.0，同一链路上区域 ID 不一致，OSPF 无法建立邻居。用 display ospf interface 对比两端 Area 即可确认，将区域改为一致后邻居恢复。",
+  "id": "qz-ospf-area"
+}

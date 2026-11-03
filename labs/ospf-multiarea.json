@@ -1,0 +1,389 @@
+{
+  "title": "OSPF多区域实验",
+  "subtitle": "AR3在area1能否学到area0路由",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "OSPF",
+    "多区域",
+    "ABR"
+  ],
+  "intro": "三台AR1220串成一条链，AR1和AR2跑area0，AR3挂area1，AR2做ABR。最终在AR3上看到area0的明细路由，并ping通AR1的loopback。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 100,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 350,
+      "y": 220
+    },
+    {
+      "name": "AR3",
+      "model": "AR1220",
+      "x": 600,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "AR2",
+      "aPort": "GE0/0/1",
+      "b": "AR3",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改三台主机名",
+      "brief": "把三台路由器分别改名为AR1、AR2、AR3。",
+      "why": "机房设备命名统一，后面看邻居和路由表时不会认错设备。",
+      "hints": [
+        "system-view 进系统视图，再改 sysname。",
+        "system-view 然后 sysname AR1，其余两台同理。",
+        "system-view\nsysname AR1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        },
+        {
+          "dev": "AR3",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR3"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ],
+        "AR3": [
+          "system-view",
+          "sysname AR3",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配AR1互联接口",
+      "brief": "AR1的GE0/0/0配10.0.12.1/24，加description。",
+      "why": "互联地址是OSPF建立邻居的基础，description写清对端方便排障。",
+      "hints": [
+        "进接口视图配地址，顺手写description。",
+        "interface GigabitEthernet0/0/0，ip address 10.0.12.1 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR2\nip address 10.0.12.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR2",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配AR2两个互联接口",
+      "brief": "AR2的GE0/0/0配10.0.12.2/24，GE0/0/1配10.0.23.2/24。",
+      "why": "AR2是中间设备，两侧各接一台，两个接口都要有地址才能分别建邻居。",
+      "hints": [
+        "两个接口分别进视图配地址。",
+        "GE0/0/0 配 10.0.12.2 24，GE0/0/1 配 10.0.23.2 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR1\nip address 10.0.12.2 24\nquit\ninterface GigabitEthernet0/0/1\ndescription to-AR3\nip address 10.0.23.2 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.23.2"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR1",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "interface GigabitEthernet0/0/1",
+          "description to-AR3",
+          "ip address 10.0.23.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "配AR3互联接口",
+      "brief": "AR3的GE0/0/0配10.0.23.3/24。",
+      "why": "AR3只接AR2一侧，配好这个地址才能和AR2建立邻居。",
+      "hints": [
+        "进GE0/0/0配地址。",
+        "interface GigabitEthernet0/0/0，ip address 10.0.23.3 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR2\nip address 10.0.23.3 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR3",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.23.3"
+        }
+      ],
+      "apply": {
+        "AR3": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR2",
+          "ip address 10.0.23.3 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "配三台Loopback",
+      "brief": "AR1、AR2、AR3各配一个Loopback0地址，模拟各自的业务网段。",
+      "why": "用Loopback当业务网段，验证跨区域路由时不受接口up/down影响，也是工程上常见的做法。",
+      "hints": [
+        "interface LoopBack0 进环回口视图配地址。",
+        "AR1用1.1.1.1/32，AR2用2.2.2.2/32，AR3用3.3.3.3/32。",
+        "system-view\ninterface LoopBack0\nip address 1.1.1.1 32\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "1.1.1.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "2.2.2.2"
+        },
+        {
+          "dev": "AR3",
+          "cmd": "display ip interface brief",
+          "expect": "3.3.3.3"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 1.1.1.1 32",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 2.2.2.2 32",
+          "quit",
+          "return"
+        ],
+        "AR3": [
+          "system-view",
+          "interface LoopBack0",
+          "ip address 3.3.3.3 32",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "AR1起OSPF area0",
+      "brief": "AR1上起OSPF进程1，router-id 1.1.1.1，把10.0.12.0和1.1.1.1宣告进area0。",
+      "why": "router-id手工指定避免选举漂移，network用反掩码精确宣告。",
+      "hints": [
+        "ospf 1 router-id 1.1.1.1 进OSPF视图，再area 0进区域视图。",
+        "area 0 里 network 10.0.12.0 0.0.0.255 和 network 1.1.1.1 0.0.0.0。",
+        "system-view\nospf 1 router-id 1.1.1.1\narea 0\nnetwork 10.0.12.0 0.0.0.255\nnetwork 1.1.1.1 0.0.0.0\nquit\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ospf 1 router-id 1.1.1.1",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "network 1.1.1.1 0.0.0.0",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "AR2起OSPF并做ABR",
+      "brief": "AR2起OSPF进程1，router-id 2.2.2.2，10.0.12.0和2.2.2.2宣告进area0，10.0.23.0宣告进area1。",
+      "why": "AR2同时接area0和area1，自动成为ABR，负责把area0的路由以Type3 LSA注入area1。",
+      "hints": [
+        "同一个OSPF进程里可以进多个area视图宣告不同网段。",
+        "area 0 宣告 10.0.12.0 和 2.2.2.2，area 1 宣告 10.0.23.0。",
+        "system-view\nospf 1 router-id 2.2.2.2\narea 0\nnetwork 10.0.12.0 0.0.0.255\nnetwork 2.2.2.2 0.0.0.0\nquit\narea 1\nnetwork 10.0.23.0 0.0.0.255\nquit\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "ospf 1 router-id 2.2.2.2",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "network 2.2.2.2 0.0.0.0",
+          "quit",
+          "area 1",
+          "network 10.0.23.0 0.0.0.255",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "AR3起OSPF area1",
+      "brief": "AR3起OSPF进程1，router-id 3.3.3.3，把10.0.23.0和3.3.3.3宣告进area1。",
+      "why": "AR3是纯区域1内部路由器，只和AR2建邻居，area0的路由只能靠AR2的Type3 LSA学过来。",
+      "hints": [
+        "AR3只在area 1里宣告，不要碰area 0。",
+        "area 1 里 network 10.0.23.0 0.0.0.255 和 network 3.3.3.3 0.0.0.0。",
+        "system-view\nospf 1 router-id 3.3.3.3\narea 1\nnetwork 10.0.23.0 0.0.0.255\nnetwork 3.3.3.3 0.0.0.0\nquit\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR3",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR3": [
+          "system-view",
+          "ospf 1 router-id 3.3.3.3",
+          "area 1",
+          "network 10.0.23.0 0.0.0.255",
+          "network 3.3.3.3 0.0.0.0",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "看AR3有没有学到area0路由",
+      "brief": "在AR3上查路由表，确认有1.1.1.1和2.2.2.2的OSPF路由。",
+      "why": "这是本实验的核心问题：ABR会把area0的明细路由以Type3 LSA注入area1，AR3路由表里应该出现O IA的路由。",
+      "hints": [
+        "display ip routing-table protocol ospf 看OSPF路由。",
+        "重点看目的1.1.1.1和2.2.2.2那两行，Proto列是O_ASE还是O_IA。",
+        "display ip routing-table protocol ospf"
+      ],
+      "check": [
+        {
+          "dev": "AR3",
+          "cmd": "display ip routing-table protocol ospf",
+          "expect": "1.1.1.1"
+        },
+        {
+          "dev": "AR3",
+          "cmd": "display ip routing-table protocol ospf",
+          "expect": "2.2.2.2"
+        }
+      ],
+      "apply": {
+        "AR3": [
+          "display ip routing-table protocol ospf"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "从AR3 ping通AR1的Loopback",
+      "brief": "在AR3上ping 1.1.1.1，四包全通。",
+      "why": "路由表有条目不代表转发通，ping通才算端到端验证通过，这也是交付前必做的动作。",
+      "hints": [
+        "直接ping AR1的Loopback地址。",
+        "ping -c 4 1.1.1.1",
+        "ping -c 4 1.1.1.1"
+      ],
+      "check": [
+        {
+          "dev": "AR3",
+          "cmd": "ping -c 4 1.1.1.1",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR3": [
+          "ping -c 4 1.1.1.1"
+        ]
+      }
+    }
+  ],
+  "id": "ospf-multiarea",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "三台路由器跑 OSPF，AR1 和 AR2 在 area 0，AR3 挂 area 1，看 AR3 能不能学到 area 0 的路由",
+  "syllabus": [
+    "HCIP-Datacom OSPF 区域间路由（16%）"
+  ]
+}

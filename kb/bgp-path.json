@@ -1,0 +1,44 @@
+{
+  "id": "bgp-path",
+  "title": "BGP 选路原则十三条",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "BGP 选路",
+    "路径选择",
+    "Best Path",
+    "BGP 决策过程",
+    "十三条原则"
+  ],
+  "one": "BGP 从多条可达路径中选出唯一最优路径的 13 步比较规则。",
+  "analogy": "就像你出差选航班：先看有没有直飞（本地优先级），再看公司协议价（MED），然后比谁家会员等级高（Origin），接着看谁先到（AS_PATH），最后看谁座位宽敞（Router ID）。一层层筛，直到只剩一个。",
+  "body": "## 为什么需要选路原则\n\nBGP 只传递可达性，不计算最短路径。当到达同一目的网段存在多条路径时，必须有一套确定性的比较规则，保证所有路由器选出的最优路径一致，避免环路和震荡。这 13 条原则按优先级从高到低依次比较，一旦分出胜负就停止。\n\n## 十三条原则详解\n\n### 1. 首选值（Weight）\n\nCisco 私有属性，华为设备不支持。值越大越优，仅本地有效，不传递。\n\n### 2. 本地优先级（Local_Preference）\n\n华为设备第一条实际比较的属性。值越大越优，默认 100。只在 IBGP 对等体间传递，不传给 EBGP。用于 AS 内部选出口。\n\n### 3. 本地始发（Local Origin）\n\n本地手动聚合、手动汇总、network 命令产生的路由优于从邻居学来的路由。\n\n### 4. AS_PATH 长度\n\nAS_PATH 越短越优。比较时忽略 AS_CONFED_SEQUENCE。可通过 as-path-filter 或 route-policy 增加 AS_PATH 长度影响选路。\n\n### 5. Origin 属性\n\nIGP（i）优于 EGP（e）优于 Incomplete（?）。IGP 表示通过 network 命令注入，EGP 表示通过 EGP 学习（已淘汰），Incomplete 表示通过 import-route 引入。\n\n### 6. MED（Multi-Exit Discriminator）\n\n值越小越优，默认 0。用于向 EBGP 邻居建议进入本 AS 的入口。默认只比较来自同一 AS 邻居的 MED，可通过命令强制比较所有。\n\n### 7. EBGP 优于 IBGP\n\n从 EBGP 学到的路由优于从 IBGP 学到的路由。因为 EBGP 路由通常更接近目的地。\n\n### 8. 到 NEXT_HOP 的 IGP 度量值\n\n比较到达下一跳的 IGP Cost，越小越优。需要 IGP 路由表中存在下一跳的可达路由。\n\n### 9. 负载分担\n\n如果配置了 maximum load-balancing，且以上属性相同，则进行负载分担。\n\n### 10. 集群列表长度\n\nAS_PATH 相同且都是 EBGP 路由时，比较 Cluster_List 长度，越短越优。用于路由反射器场景防环。\n\n### 11. Router ID\n\n比较 BGP Router ID，越小越优。\n\n### 12. 对等体地址\n\n比较邻居的 IP 地址，越小越优。\n\n### 13. 最短 Cluster_List\n\n（部分文档列为第 10 条，此处按华为文档顺序）实际华为设备在第 10 条已比较。\n\n> 注：华为 VRP 实现中，第 1 条 Weight 不支持，实际比较从 Local_Preference 开始。不同厂商文档顺序略有差异，考试以华为文档为准。\n\n## 选路过程示例\n\n假设到达 10.1.1.0/24 有两条路径：\n\n| 路径 | Local_Pref | AS_PATH | Origin | MED |\n|------|-----------|---------|--------|-----|\n| A    | 200       | 65001 65002 | i | 10 |\n| B    | 100       | 65001 | i | 5  |\n\n比较 Local_Pref，A 为 200 优于 B 的 100，选 A。后续属性不再比较。\n\n## 设计取舍\n\n- Local_Preference 只在 IBGP 内传递，让 AS 内部统一出口策略，避免 EBGP 邻居影响本地选路。\n- MED 只建议入口，不强制，且默认只比较同 AS 邻居，防止不同 AS 的 MED 值不可比导致选路混乱。\n- AS_PATH 长度比较放在 MED 之后，因为 AS_PATH 反映全局拓扑距离，而 MED 是本地策略。\n- EBGP 优于 IBGP 保证流量尽快离开本 AS，减少内部转发。\n\n## 与路由策略的配合\n\n可通过 route-policy 修改 Local_Preference、MED、AS_PATH 等属性，主动影响选路结果。注意属性修改的方向和传递范围。",
+  "cmds": [
+    "display bgp routing-table",
+    "display bgp routing-table 10.1.1.0",
+    "display bgp peer verbose",
+    "display bgp routing-table community"
+  ],
+  "pits": [
+    "Local_Preference 不传给 EBGP 邻居，修改时注意方向。",
+    "MED 默认只比较同一 AS 邻居，跨 AS 需配 compare-med。",
+    "下一跳不可达时该路由不参与选路，先查 IGP 可达性。",
+    "AS_PATH 比较忽略 confederation 段，别误判长度。",
+    "负载分担需属性完全一致且配置 maximum load-balancing。"
+  ],
+  "qa": [
+    {
+      "q": "BGP 选路原则中，华为设备首先比较哪个属性？",
+      "a": "华为设备不支持 Weight，首先比较 Local_Preference，值大者优，默认 100。"
+    },
+    {
+      "q": "MED 和 Local_Preference 有什么区别？",
+      "a": "Local_Preference 用于 AS 内部选出口，值大优，不传 EBGP；MED 用于向 EBGP 邻居建议入口，值小优，可跨 AS 传递但默认只比较同 AS。"
+    },
+    {
+      "q": "为什么 EBGP 路由优于 IBGP 路由？",
+      "a": "EBGP 路由通常更接近目的地，优先选择可让流量尽快离开本 AS，减少内部转发路径。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术 BGP 选路原则"
+}

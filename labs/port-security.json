@@ -1,0 +1,275 @@
+{
+  "title": "端口安全err-down",
+  "subtitle": "交换机接口限制MAC数并验证违规关机",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "端口安全",
+    "MAC地址",
+    "err-down"
+  ],
+  "intro": "在交换机接入口上开启端口安全，最大MAC数设为1，违规动作err-down，换一台PC后接口自动关闭。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 300,
+      "y": 300
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 300,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "x": 500,
+      "y": 300,
+      "ip": "192.168.10.20",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "PC2",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "修改交换机主机名",
+      "brief": "把交换机命名为 SW1，方便后续识别。",
+      "why": "机房设备多，统一命名规范能避免操作错设备。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先进系统视图。",
+        "system-view 进系统视图，然后 sysname SW1。",
+        "system-view\nsysname SW1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配置接入口并放行VLAN",
+      "brief": "把 GE0/0/1 和 GE0/0/2 都配成 access 口，加入 VLAN 10。",
+      "why": "端口安全通常用在接入口，先保证接口二层属性正确，后续安全功能才有意义。",
+      "hints": [
+        "先创建 VLAN 10，再把两个接口划进去。",
+        "vlan 10 创建 VLAN，interface GigabitEthernet0/0/1 进接口，port link-type access，port default vlan 10。",
+        "vlan 10\nquit\ninterface GigabitEthernet0/0/1\nport link-type access\nport default vlan 10\nquit\ninterface GigabitEthernet0/0/2\nport link-type access\nport default vlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vlan 10",
+          "expect": "GE0/0/1"
+        },
+        {
+          "dev": "SW1",
+          "cmd": "display vlan 10",
+          "expect": "GE0/0/2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "vlan 10",
+          "quit",
+          "interface GigabitEthernet0/0/1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "interface GigabitEthernet0/0/2",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "在GE0/0/1开启端口安全",
+      "brief": "在 GE0/0/1 上启用端口安全，最大 MAC 数设为 1，违规动作 err-down。",
+      "why": "接入口只允许一台终端，超过就关接口，防止私接交换机或随意换机。",
+      "hints": [
+        "进接口视图后找端口安全相关命令，先开功能再设参数。",
+        "port-security enable 开功能，port-security max-mac-num 1 限制数量，port-security protect-action error-down 设违规动作。",
+        "interface GigabitEthernet0/0/1\nport-security enable\nport-security max-mac-num 1\nport-security protect-action error-down\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display port-security interface GigabitEthernet0/0/1",
+          "expect": "Error-down"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "port-security enable",
+          "port-security max-mac-num 1",
+          "port-security protect-action error-down",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "让PC1上线学习MAC",
+      "brief": "从 SW1 ping PC1，让 GE0/0/1 学到 PC1 的 MAC。",
+      "why": "端口安全需要先学到合法 MAC，后面换机才能触发违规。",
+      "hints": [
+        "PC 没有命令行，从交换机发起 ping 即可。",
+        "ping -c 4 192.168.10.10",
+        "ping -c 4 192.168.10.10"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display mac-address interface GigabitEthernet0/0/1",
+          "expect": "192.168.10.10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -c 4 192.168.10.10"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "查看端口安全表项",
+      "brief": "确认 GE0/0/1 上已经绑定 PC1 的 MAC。",
+      "why": "现场排障要先看安全表项，确认学习结果再继续。",
+      "hints": [
+        "用 display 命令查看端口安全动态 MAC。",
+        "display port-security dynamic interface GigabitEthernet0/0/1",
+        "display port-security dynamic interface GigabitEthernet0/0/1"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display port-security dynamic interface GigabitEthernet0/0/1",
+          "expect": "192.168.10.10"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display port-security dynamic interface GigabitEthernet0/0/1"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "模拟换机触发违规",
+      "brief": "把 PC2 接到 GE0/0/1（先拔 PC1），从 SW1 ping PC2 地址。",
+      "why": "新 MAC 超过最大数 1，接口应按 err-down 动作关闭。",
+      "hints": [
+        "物理上把 PC2 网线插到 GE0/0/1，然后从交换机 ping 192.168.10.20。",
+        "ping -c 4 192.168.10.20",
+        "ping -c 4 192.168.10.20"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display interface GigabitEthernet0/0/1",
+          "expect": "ERROR DOWN"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -c 4 192.168.10.20"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "确认接口已关闭",
+      "brief": "查看 GE0/0/1 状态，确认因端口安全被 err-down。",
+      "why": "err-down 是保护动作，接口物理 up 但协议 down，必须能从回显看出来。",
+      "hints": [
+        "display interface 看当前状态和原因。",
+        "display interface GigabitEthernet0/0/1",
+        "display interface GigabitEthernet0/0/1"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display interface GigabitEthernet0/0/1",
+          "expect": "ERROR DOWN"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display interface GigabitEthernet0/0/1"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "恢复接口",
+      "brief": "手动 shutdown 再 undo shutdown，或使用 error-down auto-recovery 恢复。",
+      "why": "err-down 后接口不会自己起来，现场需要人工恢复或配自动恢复。",
+      "hints": [
+        "进接口先 shutdown 再 undo shutdown 即可恢复。",
+        "interface GigabitEthernet0/0/1\nshutdown\nundo shutdown",
+        "interface GigabitEthernet0/0/1\nshutdown\nundo shutdown\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display interface GigabitEthernet0/0/1",
+          "expect": "UP"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "shutdown",
+          "undo shutdown",
+          "quit",
+          "return"
+        ]
+      }
+    }
+  ],
+  "id": "port-security",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "交换机接 PC 的接口开端口安全，最大 MAC 数设 1，违规动作 err-down，验证换成别的 PC 后接口被关掉",
+  "syllabus": [
+    "HCIA-Datacom 3.1 以太网安全",
+    "HCIP-Datacom 高级以太网技术"
+  ]
+}

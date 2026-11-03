@@ -1,0 +1,44 @@
+{
+  "title": "根桥不在核心",
+  "level": "HCIP",
+  "cat": "交换",
+  "symptom": "核心交换机之间链路流量走向异常，部分 VLAN 的广播流量绕行接入层。查看 STP 发现根桥是接入层交换机 SW3。",
+  "topology": "flowchart TD\n  SW1[SW1 S5735 核心] --- SW2[SW2 S5735 核心]\n  SW1 --- SW3[SW3 S5700 接入]\n  SW2 --- SW3\n  SW3 --- PC1[PC1]",
+  "shows": [
+    {
+      "dev": "SW1",
+      "cmd": "display stp brief",
+      "output": " MSTID  Port                        Role  STP State     Protection\n   0    GigabitEthernet0/0/1        ALTE  DISCARDING    NONE\n   0    GigabitEthernet0/0/2        ROOT  FORWARDING    NONE"
+    },
+    {
+      "dev": "SW1",
+      "cmd": "display stp | include CIST Root/ERPC",
+      "output": " CIST Root/ERPC      : 32768 / 20000\n CIST Regional Root  : 32768 / 0"
+    },
+    {
+      "dev": "SW3",
+      "cmd": "display stp | include CIST Root/ERPC",
+      "output": " CIST Root/ERPC      : 0 / 0\n CIST Regional Root  : 0 / 0"
+    }
+  ],
+  "options": [
+    {
+      "label": "SW3 的 STP 优先级被配置为 0，低于核心交换机，抢占成为根桥",
+      "ok": true
+    },
+    {
+      "label": "核心交换机 SW1 与 SW2 之间链路故障，STP 重新收敛",
+      "ok": false
+    },
+    {
+      "label": "接入层 SW3 上开启了 BPDU 保护，导致根桥选举异常",
+      "ok": false
+    },
+    {
+      "label": "核心交换机未配置 STP 边缘端口，导致接入层参与选举",
+      "ok": false
+    }
+  ],
+  "explain": "SW3 回显 CIST Root/ERPC 为 0/0，说明它自身优先级为 0 且是根桥，优先级低于核心的 32768，故抢占成功。在 SW3 上执行 display stp 查看优先级，并用 stp priority 4096 修正，核心侧配置更低优先级即可夺回根桥。",
+  "id": "qz-stp-root"
+}

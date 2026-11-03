@@ -1,0 +1,44 @@
+{
+  "title": "Trunk 没放行 VLAN",
+  "level": "HCIA",
+  "cat": "交换",
+  "symptom": "SW1 与 SW2 之间新增 VLAN 30 后，两台交换机下挂的 VLAN 30 终端互相 ping 不通。原有 VLAN 10 终端通信一直正常。",
+  "topology": "flowchart LR\n  PC1[PC VLAN30] --- SW1[SW1 S5700]\n  SW1 ---|GE0/0/1 Trunk| SW2[SW2 S5700]\n  SW2 --- PC2[PC VLAN30]\n  SW1 --- PC3[PC VLAN10]",
+  "shows": [
+    {
+      "dev": "SW1",
+      "cmd": "display port vlan active GigabitEthernet0/0/1",
+      "output": "T=Tagged  U=Untagged\nPORT            VLAN LIST\nGE0/0/1         U: 1\n                T: 10"
+    },
+    {
+      "dev": "SW2",
+      "cmd": "display port vlan active GigabitEthernet0/0/1",
+      "output": "T=Tagged  U=Untagged\nPORT            VLAN LIST\nGE0/0/1         U: 1\n                T: 10"
+    },
+    {
+      "dev": "SW1",
+      "cmd": "display vlan 30",
+      "output": "VLAN ID: 30\nStatus: enable\nTagged ports: GE0/0/2\nUntagged ports: none"
+    }
+  ],
+  "options": [
+    {
+      "label": "两台交换机 Trunk 接口的允许 VLAN 列表未放行 VLAN 30",
+      "ok": true
+    },
+    {
+      "label": "VLAN 30 在两台交换机上都没有创建",
+      "ok": false
+    },
+    {
+      "label": "两台交换机 Trunk 接口的 PVID 不一致",
+      "ok": false
+    },
+    {
+      "label": "接入 VLAN 30 的接口没有配置成 Access 类型",
+      "ok": false
+    }
+  ],
+  "explain": "回显显示 Trunk 口 Tagged 列表只有 VLAN 10，VLAN 30 未放行，所以带 VLAN 30 Tag 的帧被丢弃。用 display port vlan active 查看 Trunk 允许列表，在两端接口补 port trunk allow-pass vlan 30 即可。",
+  "id": "qz-trunk-vlan"
+}

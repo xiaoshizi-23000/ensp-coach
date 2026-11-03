@@ -1,0 +1,355 @@
+{
+  "title": "静态路由打通两网段",
+  "subtitle": "两台 AR1220 直连，各带一个网段，用静态路由把两端 PC 打通",
+  "level": "入门",
+  "minutes": 25,
+  "tags": [
+    "静态路由",
+    "接口地址",
+    "路由表"
+  ],
+  "intro": "AR1 和 AR2 用一条 GE 口直连，各自挂一个 192.168.x.0/24 的办公网段。你在两边各写一条静态路由，让 192.168.10.0/24 和 192.168.20.0/24 互相可达，最后从路由器 ping 通对端 PC。",
+  "devices": [
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 100,
+      "y": 420,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 380,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 680,
+      "y": 220
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "x": 950,
+      "y": 420,
+      "ip": "192.168.20.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.20.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "AR1",
+      "aPort": "Ethernet0/0/0",
+      "b": "PC1",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "AR2",
+      "aPort": "Ethernet0/0/0",
+      "b": "PC2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "把两台路由器分别改成 AR1 和 AR2，后面所有回显都靠这个名字认设备。",
+      "why": "现场设备一多，靠默认的 Huawei 分不清谁是谁，剪贴板里的配置也容易贴错机器。",
+      "hints": [
+        "你现在在用户视图，提示符是 <Huawei>，配置命令在这儿敲会被拒绝，先切到系统视图。",
+        "system-view 进系统视图，sysname 改名字，改完 return 回用户视图。",
+        "system-view\nsysname AR1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配互联接口地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，AR2 的 GE0/0/0 配 10.0.12.2/24，都写上 description。",
+      "why": "这条链路是两台路由器的公共出口，静态路由的下一跳就填对端这个地址，先有它才有下一跳可写。",
+      "hints": [
+        "先在系统视图下进接口视图，description 只是备注不影响转发，但现场必须写清楚对端是谁。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址，掩码可以直接写 24。",
+        "system-view\ninterface GigabitEthernet0/0/0\ndescription to-AR2\nip address 10.0.12.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR2",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to-AR1",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配两侧办公网段网关",
+      "brief": "AR1 的 Ethernet0/0/0 配 192.168.10.1/24，AR2 的 Ethernet0/0/0 配 192.168.20.1/24。",
+      "why": "PC 的网关必须指向本网段路由器接口地址，路由器也只有配了这个地址，才知道 192.168.10.0/24 是自己的直连网段。",
+      "hints": [
+        "这台路由器带 PC 的接口是 Ethernet 口，不是 GE 口，别进错接口了。",
+        "interface Ethernet0/0/0 进接口，ip address 192.168.10.1 24 配上网关地址。",
+        "system-view\ninterface Ethernet0/0/0\ndescription to-PC1\nip address 192.168.10.1 24\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.10.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "192.168.20.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface Ethernet0/0/0",
+          "description to-PC1",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface Ethernet0/0/0",
+          "description to-PC2",
+          "ip address 192.168.20.1 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "验证直连段通不通",
+      "brief": "从 AR1 ping 10.0.12.2，四包全通。",
+      "why": "直连段是最底层的一段，这段不通后面配什么路由都是白搭，先把它钉死。",
+      "hints": [
+        "直连不需要路由，直接 ping 对端接口地址就行，-c 4 表示发四个包。",
+        "ping -c 4 10.0.12.2",
+        "ping -c 4 10.0.12.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "看清路由表现状",
+      "brief": "查一次路由表，确认里面只有 10.0.12.0/24 和 192.168.10.0/24 这些直连路由，再去 ping 对端 PC，通不了。",
+      "why": "这是排障的基准动作：路由表里没有目的网段，报文到路由器就被丢掉，现象一定是 ping 不通。",
+      "hints": [
+        "先看表里有哪些目的网段，再打一个跨网段的包，两件事对照着看。",
+        "display ip routing-table 看 Destination/Mask 这一列；然后 ping 192.168.20.10。",
+        "display ip routing-table\nping -c 4 192.168.20.10"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table",
+          "expect": "10.0.12.0/24"
+        },
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 192.168.20.10",
+          "expect": "100.00% packet loss",
+          "timeout": 60
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip routing-table",
+          "ping -c 4 192.168.20.10"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "AR1 加一条静态路由",
+      "brief": "AR1 上写 ip route-static 192.168.20.0 24 10.0.12.2。",
+      "why": "AR1 不认识 192.168.20.0/24，只能把包交给直连邻居 AR2，所以下一跳必须是 10.0.12.2 这个直连地址。",
+      "hints": [
+        "静态路由在系统视图下配，格式是“去哪个网段、掩码多少、交给谁”，交给的那个地址必须是自己能直连到的。",
+        "ip route-static 目的网络 掩码 下一跳地址",
+        "system-view\nip route-static 192.168.20.0 24 10.0.12.2\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table protocol static",
+          "expect": "192.168.20.0/24"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ip route-static 192.168.20.0 24 10.0.12.2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "AR2 加反向静态路由",
+      "brief": "AR2 上写 ip route-static 192.168.10.0 24 10.0.12.1。",
+      "why": "路由是单向的，AR1 有去路不代表有回程。ICMP 回包回不来，ping 照样是不通，现场最容易在这里卡住。",
+      "hints": [
+        "方向别写反了，AR2 要去的是 192.168.10.0/24，下一跳指向 AR1 的 10.0.12.1。",
+        "ip route-static 192.168.10.0 24 10.0.12.1",
+        "system-view\nip route-static 192.168.10.0 24 10.0.12.1\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ip routing-table protocol static",
+          "expect": "192.168.10.0/24"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "ip route-static 192.168.10.0 24 10.0.12.1",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "确认静态路由真的进表",
+      "brief": "在 AR1 和 AR2 上分别看静态路由表，确认目的网段存在、NextHop 指向对端。",
+      "why": "配置敲下去不等于生效：下一跳不可达、接口 down，这条路由都不会出现在路由表里，只看配置文件会误判。",
+      "hints": [
+        "只看静态路由用 protocol static 过滤，回显里重点看 Destination/Mask 和 NextHop 两列。",
+        "display ip routing-table protocol static",
+        "display ip routing-table protocol static"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip routing-table protocol static",
+          "expect": "10.0.12.2"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip routing-table protocol static",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ip routing-table protocol static"
+        ],
+        "AR2": [
+          "display ip routing-table protocol static"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "跨网段互通验证",
+      "brief": "AR1 ping 192.168.20.10，AR2 ping 192.168.10.10，两边都要四包全通。",
+      "why": "从路由器发起能通，说明路由和转发路径都没问题；如果这时 PC 还是不通，就该去查 PC 的网关填没填对。",
+      "hints": [
+        "两个方向都要打一遍，只测一个方向等于只测了一半的回程。",
+        "ping -c 4 192.168.20.10，反过来 ping -c 4 192.168.10.10。",
+        "AR1：ping -c 4 192.168.20.10\nAR2：ping -c 4 192.168.10.10"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 192.168.20.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        },
+        {
+          "dev": "AR2",
+          "cmd": "ping -c 4 192.168.10.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 192.168.20.10"
+        ],
+        "AR2": [
+          "ping -c 4 192.168.10.10"
+        ]
+      }
+    }
+  ],
+  "id": "static-route",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器直连，配接口地址和静态路由，验证路由表和跨网段互通"
+}

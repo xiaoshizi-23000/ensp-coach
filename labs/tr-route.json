@@ -1,0 +1,128 @@
+{
+  "title": "排错：静态路由下一跳错",
+  "subtitle": "定位并修复静态路由下一跳配置错误导致的跨网段不通",
+  "level": "进阶",
+  "minutes": 20,
+  "tags": [
+    "排错",
+    "静态路由"
+  ],
+  "mode": "troubleshoot",
+  "symptom": "PC1 能 ping 通本地网关 192.168.10.1，但 ping 不通 PC2 的 IP 192.168.20.10。",
+  "intro": "这套网络原本配置了静态路由，PC1 和 PC2 之间可以正常通信。现在 PC1 无法访问 PC2 所在网段，需要你排查并修复。",
+  "devices": [
+    {
+      "name": "R1",
+      "model": "AR2220"
+    },
+    {
+      "name": "R2",
+      "model": "AR2220"
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.1"
+    },
+    {
+      "name": "PC2",
+      "model": "PC",
+      "ip": "192.168.20.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.20.1"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "R1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "R1",
+      "aPort": "GE0/0/0",
+      "b": "R2",
+      "bPort": "GE0/0/0"
+    },
+    {
+      "a": "R2",
+      "aPort": "GE0/0/1",
+      "b": "PC2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "base": {
+    "R1": [
+      "system-view",
+      "sysname R1",
+      "interface GigabitEthernet0/0/1",
+      "ip address 192.168.10.1 24",
+      "quit",
+      "interface GigabitEthernet0/0/0",
+      "ip address 10.0.0.1 24",
+      "quit",
+      "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+    ],
+    "R2": [
+      "system-view",
+      "sysname R2",
+      "interface GigabitEthernet0/0/0",
+      "ip address 10.0.0.2 24",
+      "quit",
+      "interface GigabitEthernet0/0/1",
+      "ip address 192.168.20.1 24",
+      "quit",
+      "ip route-static 192.168.10.0 255.255.255.0 10.0.0.1"
+    ]
+  },
+  "inject": {
+    "R1": [
+      "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+      "ip route-static 192.168.20.0 255.255.255.0 10.0.0.3"
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "title": "定位并修复",
+      "brief": "先看现象、缩小范围、查配置和协议状态，把故障点找出来改回去。",
+      "why": "排错不是猜，是按层次缩小范围。",
+      "hints": [
+        "先在 PC1 上 ping 网关和 PC2，确认故障范围；然后在 R1 上查看路由表，确认去往 PC2 网段的路由是否存在。",
+        "在 R1 上执行 display ip routing-table 查看 192.168.20.0/24 的下一跳；再执行 display current-configuration | include ip route-static 查看静态路由配置。",
+        "在 R1 上删除错误的静态路由，重新配置正确的下一跳：undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.3 然后 ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display ip routing-table 192.168.20.0",
+          "expect": "下一跳为 10.0.0.2"
+        },
+        {
+          "dev": "PC1",
+          "cmd": "ping 192.168.20.10",
+          "expect": "通"
+        }
+      ],
+      "keep": [
+        {
+          "dev": "PC1",
+          "cmd": "ping 192.168.10.1",
+          "expect": "通"
+        }
+      ],
+      "apply": {
+        "R1": [
+          "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.3",
+          "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+        ]
+      }
+    }
+  ],
+  "id": "tr-route",
+  "source": "builtin",
+  "txttips": []
+}

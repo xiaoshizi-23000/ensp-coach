@@ -1,0 +1,114 @@
+{
+  "title": "排错：OSPF 邻居起不来",
+  "subtitle": "排查两台直连路由器 OSPF 邻居无法建立的问题",
+  "level": "进阶",
+  "minutes": 20,
+  "tags": [
+    "排错",
+    "OSPF"
+  ],
+  "mode": "troubleshoot",
+  "symptom": "R1 和 R2 接口地址配置正确、物理链路正常，但 OSPF 邻居一直停留在 Down 状态，学不到对端路由。",
+  "intro": "这套网络原本 OSPF 邻居正常、路由互通，现在邻居起不来了。请定位故障点并恢复。",
+  "devices": [
+    {
+      "name": "R1",
+      "model": "AR2220"
+    },
+    {
+      "name": "R2",
+      "model": "AR2220"
+    }
+  ],
+  "links": [
+    {
+      "a": "R1",
+      "aPort": "GE0/0/0",
+      "b": "R2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "base": {
+    "R1": [
+      "system-view",
+      "sysname R1",
+      "interface GigabitEthernet0/0/0",
+      "ip address 10.0.12.1 255.255.255.0",
+      "quit",
+      "ospf 1 router-id 1.1.1.1",
+      "area 0",
+      "network 10.0.12.0 0.0.0.255",
+      "quit",
+      "quit"
+    ],
+    "R2": [
+      "system-view",
+      "sysname R2",
+      "interface GigabitEthernet0/0/0",
+      "ip address 10.0.12.2 255.255.255.0",
+      "quit",
+      "ospf 1 router-id 2.2.2.2",
+      "area 0",
+      "network 10.0.12.0 0.0.0.255",
+      "quit",
+      "quit"
+    ]
+  },
+  "inject": {
+    "R2": [
+      "system-view",
+      "ospf 1",
+      "undo area 0",
+      "area 1",
+      "network 10.0.12.0 0.0.0.255",
+      "quit",
+      "quit"
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "title": "定位并修复",
+      "brief": "先看邻居状态，再核对两端 OSPF 区域配置，找出不一致处并改回。",
+      "why": "OSPF 邻居建立要求两端接口处于同一区域，区域 ID 不一致会导致 Hello 报文被丢弃，邻居停在 Down。",
+      "hints": [
+        "先确认邻居状态和 OSPF 是否正常运行，再对比两端区域配置。",
+        "在 R1 和 R2 上分别执行 display ospf peer brief 和 display current-configuration configuration ospf，查看两端 area 是否一致。",
+        "在 R2 上删除错误区域并恢复 area 0：undo area 1，area 0，network 10.0.12.0 0.0.0.255。"
+      ],
+      "check": [
+        {
+          "dev": "R1",
+          "cmd": "display ospf peer brief",
+          "expect": "State: Full"
+        },
+        {
+          "dev": "R2",
+          "cmd": "display current-configuration configuration ospf",
+          "expect": "area 0.0.0.0"
+        }
+      ],
+      "keep": [
+        {
+          "dev": "R1",
+          "cmd": "ping -c 2 10.0.12.2",
+          "expect": "0.00% packet loss"
+        }
+      ],
+      "apply": {
+        "R2": [
+          "system-view",
+          "ospf 1",
+          "undo area 1",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "quit",
+          "quit"
+        ]
+      }
+    }
+  ],
+  "id": "tr-ospf",
+  "source": "builtin",
+  "txttips": []
+}

@@ -1,0 +1,325 @@
+{
+  "title": "OSPF MD5 认证排错",
+  "subtitle": "两台路由器 OSPF area 0 开启 MD5 认证，故意写错密码观察邻居状态",
+  "level": "进阶",
+  "minutes": 25,
+  "tags": [
+    "OSPF",
+    "MD5认证",
+    "排错"
+  ],
+  "intro": "两台 AR1220 直连，在 area 0 开启 OSPF MD5 认证，先配正确密码让邻居到 Full，再故意改错一端密码，观察邻居无法建立并恢复。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 520,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名并配接口地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，AR2 的 GE0/0/0 配 10.0.12.2/24，并加 description。",
+      "why": "互联接口必须在同一网段，description 写清楚对端设备，现场排错一眼能看出链路用途。",
+      "hints": [
+        "先 system-view 进系统视图，再进接口视图配地址和 description。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址，description to_AR2 加描述。",
+        "AR1：\nsystem-view\nsysname AR1\ninterface GigabitEthernet0/0/0\nip address 10.0.12.1 24\ndescription to_AR2\nquit\n\nAR2 换成 10.0.12.2 和 description to_AR1。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.1 24",
+          "description to_AR2",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "interface GigabitEthernet0/0/0",
+          "ip address 10.0.12.2 24",
+          "description to_AR1",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "验证直连互通",
+      "brief": "从 AR1 ping 10.0.12.2，四包全通。",
+      "why": "直连不需要路由，配好地址就应该通，不通说明接口地址或物理链路有问题，先排除底层再配 OSPF。",
+      "hints": [
+        "直接 ping 对端地址，-c 指定次数。",
+        "ping -c 4 10.0.12.2",
+        "ping -c 4 10.0.12.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "AR1 启动 OSPF 并宣告网段",
+      "brief": "AR1 创建 OSPF 进程 1，router-id 1.1.1.1，在 area 0 宣告 10.0.12.0/24。",
+      "why": "OSPF 必须先有进程和 area，network 命令用反掩码宣告接口网段，接口才会参与邻居建立。",
+      "hints": [
+        "ospf 1 router-id 1.1.1.1 进 OSPF 视图，area 0 进区域视图，network 宣告网段。",
+        "ospf 1 router-id 1.1.1.1\narea 0\nnetwork 10.0.12.0 0.0.0.255",
+        "system-view\nospf 1 router-id 1.1.1.1\narea 0\nnetwork 10.0.12.0 0.0.0.255\nquit\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "1.1.1.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "ospf 1 router-id 1.1.1.1",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "AR2 启动 OSPF 并宣告网段",
+      "brief": "AR2 创建 OSPF 进程 1，router-id 2.2.2.2，在 area 0 宣告 10.0.12.0/24。",
+      "why": "两端都要有 OSPF 进程并宣告同一网段，邻居才能互相发现并进入 Full。",
+      "hints": [
+        "和 AR1 一样，只是 router-id 换成 2.2.2.2。",
+        "ospf 1 router-id 2.2.2.2\narea 0\nnetwork 10.0.12.0 0.0.0.255",
+        "system-view\nospf 1 router-id 2.2.2.2\narea 0\nnetwork 10.0.12.0 0.0.0.255\nquit\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ospf peer brief",
+          "expect": "2.2.2.2"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "ospf 1 router-id 2.2.2.2",
+          "area 0",
+          "network 10.0.12.0 0.0.0.255",
+          "quit",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "验证 OSPF 邻居到 Full",
+      "brief": "在 AR1 上查看 OSPF 邻居，状态应为 Full。",
+      "why": "Full 表示 LSDB 已同步，邻居关系完全建立，这是 OSPF 正常工作的标志。",
+      "hints": [
+        "display ospf peer brief 看邻居状态。",
+        "display ospf peer brief",
+        "display ospf peer brief"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ospf peer brief"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "AR1 接口开启 MD5 认证",
+      "brief": "在 AR1 的 GE0/0/0 接口上开启 OSPF MD5 认证，key-id 1，密码 huawei123。",
+      "why": "MD5 认证在接口视图下配置，key-id 和密码两端必须完全一致，否则邻居无法建立。",
+      "hints": [
+        "进接口视图，用 ospf authentication-mode md5 命令配 key-id 和密码。",
+        "interface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123",
+        "system-view\ninterface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf interface GigabitEthernet0/0/0",
+          "expect": "MD5"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospf authentication-mode md5 1 cipher huawei123",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "AR2 接口开启 MD5 认证",
+      "brief": "在 AR2 的 GE0/0/0 接口上开启 OSPF MD5 认证，key-id 1，密码 huawei123。",
+      "why": "两端认证参数必须一致，AR2 配好后邻居应该重新建立到 Full。",
+      "hints": [
+        "和 AR1 一样，key-id 和密码保持一致。",
+        "interface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123",
+        "system-view\ninterface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR2",
+          "cmd": "display ospf interface GigabitEthernet0/0/0",
+          "expect": "MD5"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospf authentication-mode md5 1 cipher huawei123",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "验证认证后邻居仍为 Full",
+      "brief": "在 AR1 上查看邻居，状态应为 Full。",
+      "why": "认证参数一致时邻居不受影响，确认认证配置正确且没有中断邻居关系。",
+      "hints": [
+        "display ospf peer brief 看邻居状态。",
+        "display ospf peer brief",
+        "display ospf peer brief"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display ospf peer brief"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "故意改错 AR2 密码",
+      "brief": "把 AR2 的 GE0/0/0 接口 MD5 密码改成 huawei456，观察邻居状态。",
+      "why": "密码不一致时 OSPF 认证失败，邻居无法建立，这是现场最常见的认证故障。",
+      "hints": [
+        "进接口视图重新配 ospf authentication-mode md5，密码改成 huawei456。",
+        "interface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei456",
+        "system-view\ninterface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei456\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Down"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospf authentication-mode md5 1 cipher huawei456",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "恢复正确密码并验证",
+      "brief": "把 AR2 的密码改回 huawei123，邻居应重新回到 Full。",
+      "why": "认证失败后修正密码，OSPF 会重新建立邻居，确认故障恢复。",
+      "hints": [
+        "进接口视图把密码改回 huawei123，然后查看邻居状态。",
+        "interface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123\nquit\ndisplay ospf peer brief",
+        "system-view\ninterface GigabitEthernet0/0/0\nospf authentication-mode md5 1 cipher huawei123\nquit\nreturn\ndisplay ospf peer brief"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ospf peer brief",
+          "expect": "Full"
+        }
+      ],
+      "apply": {
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "ospf authentication-mode md5 1 cipher huawei123",
+          "quit",
+          "return"
+        ],
+        "AR1": [
+          "display ospf peer brief"
+        ]
+      }
+    }
+  ],
+  "id": "ospf-auth",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器 OSPF area 0 开启 MD5 认证，配完邻居能到 Full，故意写错密码邻居起不来",
+  "syllabus": [
+    "HCIP-Datacom OSPF 特殊区域与特性"
+  ]
+}

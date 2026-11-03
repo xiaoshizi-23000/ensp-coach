@@ -1,0 +1,44 @@
+{
+  "title": "DHCP 拿不到地址",
+  "level": "HCIP",
+  "cat": "路由",
+  "symptom": "接入侧已配置DHCP中继，核心DHCP服务器也在运行，但下挂PC始终无法获取IP地址。",
+  "topology": "flowchart LR\nPC1[PC] --> SW1[SW1 接入交换机]\nSW1 --> R1[R1 中继路由器]\nR1 --> R2[R2 核心/DHCP服务器]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display dhcp relay statistics",
+      "output": "DHCP relay statistics:\n  Received from clients      : 12\n  Received from servers      : 0\n  Sent to servers            : 12\n  Sent to clients            : 0\n  Discarded                  : 0"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display current-configuration | include dhcp-server",
+      "output": " dhcp-server 10.1.2.100"
+    },
+    {
+      "dev": "R2",
+      "cmd": "display ip interface brief | include GigabitEthernet0/0/1",
+      "output": "Interface            IP Address/Mask    Physical  Protocol\nGigabitEthernet0/0/1 10.1.2.1/24        up        up"
+    }
+  ],
+  "options": [
+    {
+      "label": "R1 中继指向的 DHCP 服务器地址配置错误",
+      "ok": true
+    },
+    {
+      "label": "R1 的接口地址掩码写错了",
+      "ok": false
+    },
+    {
+      "label": "R2 没有开启 DHCP 服务",
+      "ok": false
+    },
+    {
+      "label": "R1 与 R2 之间的链路没有 up",
+      "ok": false
+    }
+  ],
+  "explain": "R1 向服务器发送了12个请求但收到0个回应，说明中继报文发往的服务器地址不可达；而 R2 实际地址为10.1.2.1，R1 却指向10.1.2.100。用 display dhcp relay statistics 结合 display current-configuration | include dhcp-server 即可确认。",
+  "id": "qz-dhcp-relay"
+}

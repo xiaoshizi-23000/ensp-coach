@@ -1,0 +1,385 @@
+{
+  "title": "VRRP 主备网关",
+  "subtitle": "两台三层交换机做 VRRP，验证主备切换和虚拟 MAC",
+  "level": "进阶",
+  "minutes": 25,
+  "tags": [
+    "VRRP",
+    "VLAN",
+    "三层交换"
+  ],
+  "intro": "两台 S5700 三层交换机在 VLAN10 上运行 VRRP，虚拟网关 192.168.10.254，SW1 为主、SW2 为备。最终能手动切换主备，并看到虚拟 MAC 始终不变。",
+  "devices": [
+    {
+      "name": "SW1",
+      "model": "S5700",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "SW2",
+      "model": "S5700",
+      "x": 500,
+      "y": 220
+    },
+    {
+      "name": "PC1",
+      "model": "PC",
+      "x": 350,
+      "y": 420,
+      "ip": "192.168.10.10",
+      "mask": "255.255.255.0",
+      "gateway": "192.168.10.254"
+    }
+  ],
+  "links": [
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW1",
+      "bPort": "GE0/0/1"
+    },
+    {
+      "a": "PC1",
+      "aPort": "GE0/0/0",
+      "b": "SW2",
+      "bPort": "GE0/0/1"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名并划 VLAN10",
+      "brief": "SW1、SW2 分别改名，并创建 VLAN10。",
+      "why": "现场先按命名规范改主机名，后续看回显才不会认错设备；VLAN 是 VRRP 虚拟网关的承载广播域。",
+      "hints": [
+        "先 system-view 进系统视图，再改 sysname，然后 vlan 10 创建 VLAN。",
+        "system-view → sysname SW1 → vlan 10 → quit。SW2 同理。",
+        "SW1：\nsystem-view\nsysname SW1\nvlan 10\nquit\nreturn\n\nSW2：\nsystem-view\nsysname SW2\nvlan 10\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname SW2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "sysname SW1",
+          "vlan 10",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "sysname SW2",
+          "vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "把接 PC 的接口划进 VLAN10",
+      "brief": "SW1 和 SW2 的 GE0/0/1 都配成 access，划入 VLAN10，并加 description。",
+      "why": "PC 接的是 access 口，不打标签直接进 VLAN10；description 方便现场排线时认口。",
+      "hints": [
+        "进接口视图，port link-type access，再 port default vlan 10。",
+        "interface GigabitEthernet0/0/1 → port link-type access → port default vlan 10。",
+        "SW1：\nsystem-view\ninterface GigabitEthernet0/0/1\ndescription to-PC1\nport link-type access\nport default vlan 10\nquit\nreturn\n\nSW2 同样操作。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vlan 10",
+          "expect": "UT:GE0/0/1(U)"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display vlan 10",
+          "expect": "UT:GE0/0/1(U)"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-PC1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface GigabitEthernet0/0/1",
+          "description to-PC1",
+          "port link-type access",
+          "port default vlan 10",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "配 VLANIF10 接口地址",
+      "brief": "SW1 的 Vlanif10 配 192.168.10.1/24，SW2 配 192.168.10.2/24。",
+      "why": "VRRP 虚拟网关要挂在三层接口上，两台设备各有一个真实地址作为 VRRP 的源和心跳地址。",
+      "hints": [
+        "interface Vlanif10 进三层接口，ip address 配地址。",
+        "interface Vlanif10 → ip address 192.168.10.1 24。",
+        "SW1：\nsystem-view\ninterface Vlanif10\nip address 192.168.10.1 24\nquit\nreturn\n\nSW2 配 192.168.10.2 24。"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display ip interface brief | include Vlanif10",
+          "expect": "192.168.10.1"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display ip interface brief | include Vlanif10",
+          "expect": "192.168.10.2"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "ip address 192.168.10.1 24",
+          "quit",
+          "return"
+        ],
+        "SW2": [
+          "system-view",
+          "interface Vlanif10",
+          "ip address 192.168.10.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "SW1 上起 VRRP 主",
+      "brief": "在 SW1 的 Vlanif10 上配 vrid 10、virtual-ip 192.168.10.254、priority 120。",
+      "why": "priority 默认 100，改 120 让 SW1 抢主；virtual-ip 就是 PC 的网关地址。",
+      "hints": [
+        "在 Vlanif10 接口视图下用 vrrp vrid 命令。",
+        "vrrp vrid 10 virtual-ip 192.168.10.254，再 vrrp vrid 10 priority 120。",
+        "system-view\ninterface Vlanif10\nvrrp vrid 10 virtual-ip 192.168.10.254\nvrrp vrid 10 priority 120\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vrrp brief",
+          "expect": "Master"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "vrrp vrid 10 virtual-ip 192.168.10.254",
+          "vrrp vrid 10 priority 120",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "SW2 上起 VRRP 备",
+      "brief": "在 SW2 的 Vlanif10 上配同样的 vrid 10 和 virtual-ip，priority 保持默认 100。",
+      "why": "vrid 和 virtual-ip 必须和 SW1 完全一致才能进同一个备份组；优先级低自然成为 Backup。",
+      "hints": [
+        "同样在 Vlanif10 下配 vrrp vrid 10 virtual-ip，不配 priority。",
+        "vrrp vrid 10 virtual-ip 192.168.10.254。",
+        "system-view\ninterface Vlanif10\nvrrp vrid 10 virtual-ip 192.168.10.254\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display vrrp brief",
+          "expect": "Backup"
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "system-view",
+          "interface Vlanif10",
+          "vrrp vrid 10 virtual-ip 192.168.10.254",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "确认主备角色和虚拟 MAC",
+      "brief": "在 SW1 和 SW2 上看 VRRP 状态，记下虚拟 MAC 地址。",
+      "why": "现场验收先看谁是 Master，再看虚拟 MAC 是不是 0000-5e00-01xx（xx 是 vrid 的十六进制）。",
+      "hints": [
+        "display vrrp 看详细状态，display vrrp brief 看简表。",
+        "display vrrp 里找 State 和 Virtual MAC。",
+        "display vrrp\ndisplay vrrp brief"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vrrp",
+          "expect": "0000-5e00-010a"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display vrrp",
+          "expect": "0000-5e00-010a"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "display vrrp",
+          "display vrrp brief"
+        ],
+        "SW2": [
+          "display vrrp",
+          "display vrrp brief"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "从 SW1 验证虚拟网关可达",
+      "brief": "从 SW1 ping 虚拟网关 192.168.10.254，四包全通。",
+      "why": "Master 自己 ping 虚拟 IP 能通，说明 VRRP 组已经生效，虚拟地址在本地生效。",
+      "hints": [
+        "直接 ping 虚拟网关地址。",
+        "ping -c 4 192.168.10.254",
+        "ping -c 4 192.168.10.254"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "ping -c 4 192.168.10.254",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "ping -c 4 192.168.10.254"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "手动切换主备",
+      "brief": "在 SW1 的 Vlanif10 上把 vrrp vrid 10 priority 改成 90，让 SW2 抢主。",
+      "why": "现场割接或演练时常用降优先级的方式主动让出 Master，比拔线更可控。",
+      "hints": [
+        "进 Vlanif10 改 priority 低于 100。",
+        "vrrp vrid 10 priority 90。",
+        "system-view\ninterface Vlanif10\nvrrp vrid 10 priority 90\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vrrp brief",
+          "expect": "Backup"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display vrrp brief",
+          "expect": "Master"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "vrrp vrid 10 priority 90",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s9",
+      "title": "切换后验证虚拟 MAC 不变",
+      "brief": "在 SW2 上看 VRRP 状态，确认虚拟 MAC 仍是 0000-5e00-010a，并从 SW2 ping 虚拟网关。",
+      "why": "虚拟 MAC 跟着 vrid 走，不跟着物理设备走，所以切换后 PC 的 ARP 表不用变，业务不中断。",
+      "hints": [
+        "display vrrp 看 SW2 的 Virtual MAC，再 ping 虚拟 IP。",
+        "display vrrp → 找 Virtual MAC；ping -c 4 192.168.10.254。",
+        "display vrrp\nping -c 4 192.168.10.254"
+      ],
+      "check": [
+        {
+          "dev": "SW2",
+          "cmd": "display vrrp",
+          "expect": "0000-5e00-010a"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "ping -c 4 192.168.10.254",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "SW2": [
+          "display vrrp",
+          "ping -c 4 192.168.10.254"
+        ]
+      }
+    },
+    {
+      "id": "s10",
+      "title": "恢复 SW1 主角色",
+      "brief": "把 SW1 的 priority 改回 120，确认它重新抢回 Master。",
+      "why": "演练完要恢复原设计，否则下次真故障时主备关系和规划不一致。",
+      "hints": [
+        "进 Vlanif10 把 priority 改回 120。",
+        "vrrp vrid 10 priority 120。",
+        "system-view\ninterface Vlanif10\nvrrp vrid 10 priority 120\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "SW1",
+          "cmd": "display vrrp brief",
+          "expect": "Master"
+        },
+        {
+          "dev": "SW2",
+          "cmd": "display vrrp brief",
+          "expect": "Backup"
+        }
+      ],
+      "apply": {
+        "SW1": [
+          "system-view",
+          "interface Vlanif10",
+          "vrrp vrid 10 priority 120",
+          "quit",
+          "return"
+        ]
+      }
+    }
+  ],
+  "id": "vrrp-gateway",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台三层交换机做 VRRP，虚拟网关 192.168.10.254，SW1 主 SW2 备，验证主备切换和虚拟 MAC",
+  "syllabus": [
+    "HCIP-Datacom 网络可靠性 VRRP（8%）"
+  ]
+}

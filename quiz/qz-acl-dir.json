@@ -1,0 +1,44 @@
+{
+  "title": "ACL 挂反了方向",
+  "level": "HCIA",
+  "cat": "安全",
+  "symptom": "在出口路由器上配置 ACL 想拦截外网访问内网，结果内网用户全部无法上网，外网访问内网却仍然可以通。",
+  "topology": "flowchart LR\n  PC[PC 内网用户] --> SW[S5700 交换机]\n  SW --> R1[AR2220 出口路由器]\n  R1 --> Internet[Internet 外网]",
+  "shows": [
+    {
+      "dev": "R1",
+      "cmd": "display acl 3000",
+      "output": "Basic ACL 3000, 2 rules\nAcl's step is 5\n rule 5 deny tcp destination-port eq 80\n rule 10 permit ip"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display interface GigabitEthernet0/0/1",
+      "output": "GigabitEthernet0/0/1 current state : UP\nLine protocol current state : UP\nInternet Address is 202.1.1.1/30\nTraffic statistics:\n  Input: 1520 packets\n  Output: 980 packets"
+    },
+    {
+      "dev": "R1",
+      "cmd": "display current-configuration interface GigabitEthernet0/0/0",
+      "output": "interface GigabitEthernet0/0/0\n ip address 192.168.1.1 255.255.255.0\n traffic-filter inbound acl 3000"
+    }
+  ],
+  "options": [
+    {
+      "label": "ACL 3000 被应用在内网接口的 inbound 方向，方向挂反",
+      "ok": true
+    },
+    {
+      "label": "ACL 3000 的规则顺序写错，deny 应放在 permit 后面",
+      "ok": false
+    },
+    {
+      "label": "内网接口没有配置 NAT，导致内网无法上网",
+      "ok": false
+    },
+    {
+      "label": "ACL 3000 的匹配条件写错，应使用 source 而不是 destination-port",
+      "ok": false
+    }
+  ],
+  "explain": "ACL 3000 本意是拦截外网进入内网的流量，却挂在 G0/0/0 的 inbound 方向，把内网发出的流量全拦了。用 display current-configuration interface 查看各接口的 traffic-filter 方向即可确认，应改挂到外网接口 G0/0/1 的 inbound。",
+  "id": "qz-acl-dir"
+}

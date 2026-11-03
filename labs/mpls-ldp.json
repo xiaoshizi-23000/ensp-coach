@@ -1,0 +1,311 @@
+{
+  "title": "直连MPLS与LDP实验",
+  "subtitle": "两台路由器直连跑通MPLS LDP并验证LSP",
+  "level": "进阶",
+  "minutes": 25,
+  "tags": [
+    "MPLS",
+    "LDP",
+    "LSP"
+  ],
+  "intro": "两台AR1220直连，配好接口地址和IGP后全局与接口开启MPLS和LDP，最后确认LDP会话建立、LSP标签转发表生成。",
+  "devices": [
+    {
+      "name": "AR1",
+      "model": "AR1220",
+      "x": 200,
+      "y": 220
+    },
+    {
+      "name": "AR2",
+      "model": "AR1220",
+      "x": 520,
+      "y": 220
+    }
+  ],
+  "links": [
+    {
+      "a": "AR1",
+      "aPort": "GE0/0/0",
+      "b": "AR2",
+      "bPort": "GE0/0/0"
+    }
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "改主机名",
+      "brief": "两台路由器分别改名为 AR1 和 AR2。",
+      "why": "机房命名规范，后面看 LDP 邻居和 LSP 时一眼能对上设备，避免在回显里认错。",
+      "hints": [
+        "你现在在用户视图，配置命令会被拒绝，先 system-view 进系统视图。",
+        "system-view 后敲 sysname AR1，AR2 同理。",
+        "AR1：\nsystem-view\nsysname AR1\nreturn\n\nAR2：\nsystem-view\nsysname AR2\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display current-configuration | include sysname",
+          "expect": "sysname AR2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "sysname AR1",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "sysname AR2",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s2",
+      "title": "配互联接口地址",
+      "brief": "AR1 的 GE0/0/0 配 10.0.12.1/24，AR2 的 GE0/0/0 配 10.0.12.2/24。",
+      "why": "MPLS 转发依赖底层 IP 可达，LDP 的传输地址也取自接口地址，地址不通后面全白搭。",
+      "hints": [
+        "进接口视图配地址，顺手加 description 标清对端。",
+        "interface GigabitEthernet0/0/0 进接口，ip address 10.0.12.1 24 配地址，description to AR2 标注。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\ndescription to AR2\nip address 10.0.12.1 24\nquit\nreturn\n\nAR2 换成 10.0.12.2，description to AR1。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display ip interface brief",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to AR2",
+          "ip address 10.0.12.1 24",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "description to AR1",
+          "ip address 10.0.12.2 24",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s3",
+      "title": "验证直连互通",
+      "brief": "从 AR1 ping 10.0.12.2，四包全通。",
+      "why": "LDP 会话建立前必须先有 IP 层可达，这一步不通就别往下开 MPLS 了。",
+      "hints": [
+        "直接 ping 对端接口地址，-c 指定次数。",
+        "ping -c 4 10.0.12.2",
+        "ping -c 4 10.0.12.2"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2"
+        ]
+      }
+    },
+    {
+      "id": "s4",
+      "title": "全局开启 MPLS",
+      "brief": "两台路由器在系统视图下全局使能 MPLS。",
+      "why": "VRP 里 MPLS 默认关闭，全局不开，接口下的 mpls 命令敲不进去，这是新手最常卡的一步。",
+      "hints": [
+        "在系统视图下找 mpls 相关命令，注意是全局开关不是接口命令。",
+        "system-view 后敲 mpls，再 mpls lsr-id 指定 LSR ID，习惯用 Loopback 地址或接口地址。",
+        "AR1：\nsystem-view\nmpls\nmpls lsr-id 10.0.12.1\nquit\nreturn\n\nAR2：\nsystem-view\nmpls\nmpls lsr-id 10.0.12.2\nquit\nreturn"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display mpls lsr-id",
+          "expect": "10.0.12.1"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display mpls lsr-id",
+          "expect": "10.0.12.2"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "mpls",
+          "mpls lsr-id 10.0.12.1",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "mpls",
+          "mpls lsr-id 10.0.12.2",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s5",
+      "title": "接口开启 MPLS 与 LDP",
+      "brief": "两台路由器的 GE0/0/0 接口下同时使能 mpls 和 mpls ldp。",
+      "why": "全局只是总开关，标签转发和 LDP 会话都是按接口生效的，接口不开就不会收发标签报文。",
+      "hints": [
+        "进 GE0/0/0 接口视图，先 mpls 再 mpls ldp，两条都要敲。",
+        "interface GigabitEthernet0/0/0 下敲 mpls，再敲 mpls ldp。",
+        "AR1：\nsystem-view\ninterface GigabitEthernet0/0/0\nmpls\nmpls ldp\nquit\nreturn\n\nAR2 同样在 GE0/0/0 下敲 mpls 和 mpls ldp。"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display mpls interface",
+          "expect": "GigabitEthernet0/0/0"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display mpls interface",
+          "expect": "GigabitEthernet0/0/0"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "mpls",
+          "mpls ldp",
+          "quit",
+          "return"
+        ],
+        "AR2": [
+          "system-view",
+          "interface GigabitEthernet0/0/0",
+          "mpls",
+          "mpls ldp",
+          "quit",
+          "return"
+        ]
+      }
+    },
+    {
+      "id": "s6",
+      "title": "检查 LDP 会话建立",
+      "brief": "在 AR1 上查看 LDP 邻居，确认与 AR2 的会话为 Operational。",
+      "why": "LDP 靠 TCP 646 端口建会话，状态不是 Operational 就说明传输地址或接口没配对。",
+      "hints": [
+        "用 display 类命令看 LDP 邻居表，关注 State 字段。",
+        "display mpls ldp peer 看邻居，display mpls ldp session 看会话状态。",
+        "display mpls ldp peer\ndisplay mpls ldp session"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display mpls ldp session",
+          "expect": "Operational"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display mpls ldp session",
+          "expect": "Operational"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display mpls ldp peer",
+          "display mpls ldp session"
+        ],
+        "AR2": [
+          "display mpls ldp peer",
+          "display mpls ldp session"
+        ]
+      }
+    },
+    {
+      "id": "s7",
+      "title": "查看 LSP 标签转发表",
+      "brief": "在 AR1 上查看 LSP 表，确认到 10.0.12.2/32 的标签转发表项已生成。",
+      "why": "LDP 会话起来后会自动为对端 LSR ID 主机路由分配标签，LSP 表里能看到入标签和出标签才算真正打通。",
+      "hints": [
+        "用 display mpls lsp 看标签交换路径，注意 In/Out Label 和 NextHop。",
+        "display mpls lsp 看全表，display mpls lsp verbose 看明细。",
+        "display mpls lsp\ndisplay mpls lsp verbose"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "display mpls lsp",
+          "expect": "10.0.12.2"
+        },
+        {
+          "dev": "AR2",
+          "cmd": "display mpls lsp",
+          "expect": "10.0.12.1"
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "display mpls lsp",
+          "display mpls lsp verbose"
+        ],
+        "AR2": [
+          "display mpls lsp",
+          "display mpls lsp verbose"
+        ]
+      }
+    },
+    {
+      "id": "s8",
+      "title": "验证标签转发",
+      "brief": "从 AR1 ping AR2 的接口地址，确认流量走标签转发且不丢包。",
+      "why": "最后一步用业务流量兜底，LSP 表有项但 ping 不通说明标签栈或底层路由还有问题。",
+      "hints": [
+        "直接 ping 对端地址，再回看 LSP 表确认标签没变。",
+        "ping -c 4 10.0.12.2，然后 display mpls lsp 复核。",
+        "ping -c 4 10.0.12.2\ndisplay mpls lsp"
+      ],
+      "check": [
+        {
+          "dev": "AR1",
+          "cmd": "ping -c 4 10.0.12.2",
+          "expect": "0.00% packet loss",
+          "timeout": 40
+        }
+      ],
+      "apply": {
+        "AR1": [
+          "ping -c 4 10.0.12.2",
+          "display mpls lsp"
+        ]
+      }
+    }
+  ],
+  "id": "mpls-ldp",
+  "source": "builtin",
+  "txttips": [],
+  "brief": "两台路由器直连开启 MPLS 和 LDP，验证 LDP 会话建立、LSP 标签转发表生成"
+}
