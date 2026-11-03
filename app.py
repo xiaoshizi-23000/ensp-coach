@@ -1335,9 +1335,18 @@ def diff_step(lab, step):
         want = expected_from_apply(cmds)
         have = parse_device_config(text)
         have_all = {ln for v in have.values() for ln in v}
+        batch_vlans = set()
+        for ln in have_all:
+            m2 = re.fullmatch(r"vlan batch (.+)", ln)
+            if m2:
+                batch_vlans.update(m2.group(1).split())
         missing, extra, hit = [], [], 0
         for ctx, lines in want.items():
             for ln in lines:
+                mv = re.fullmatch(r"vlan (\d+)", ln)
+                if mv and mv.group(1) in batch_vlans:
+                    hit += 1
+                    continue
                 if ln in have_all:
                     hit += 1
                 else:

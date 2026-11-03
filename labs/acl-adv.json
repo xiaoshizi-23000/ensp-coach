@@ -104,7 +104,12 @@
         {
           "dev": "SW1",
           "cmd": "display vlan",
-          "expect": "VLAN ID: 10"
+          "expect_any": [
+            "VLAN 0010",
+            "10   common",
+            "10  common",
+            "10 common"
+          ]
         }
       ],
       "apply": {
