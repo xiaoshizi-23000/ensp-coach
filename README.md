@@ -25,7 +25,7 @@ AI 驱动的华为 eNSP 实验陪练。不替你敲命令，做三件事：把�
 环境要求：Windows 10/11（64 位）、华为 eNSP（含配套 VirtualBox 5.2.x）、DeepSeek API Key。
 
 ```bat
-git clone git@github.com:jiangjinlin/ensp-coach.git
+git clone git@github.com:xiaoshizi-23000/ensp-coach.git
 cd ensp-coach
 python app.py
 ```
