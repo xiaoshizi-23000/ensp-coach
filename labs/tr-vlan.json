@@ -88,6 +88,8 @@
   },
   "inject": {
     "SW2": [
+      "system-view",
+      "vlan batch 20",
       "interface GigabitEthernet0/0/1",
       "port default vlan 20",
       "quit"
@@ -109,22 +111,25 @@
           "dev": "SW2",
           "cmd": "display current-configuration interface GigabitEthernet0/0/1",
           "expect": "port default vlan 10"
+        },
+        {
+          "dev": "SW1",
+          "cmd": "ping -c 3 192.168.10.20",
+          "expect": "0.00% packet loss",
+          "timeout": 40
         }
       ],
       "keep": [
         {
-          "dev": "PC1",
-          "cmd": "ping 192.168.10.1",
-          "expect": "0.00% packet loss"
-        },
-        {
-          "dev": "PC1",
-          "cmd": "ping 192.168.10.20",
-          "expect": "0.00% packet loss"
+          "dev": "SW1",
+          "cmd": "ping -c 3 192.168.10.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
         }
       ],
       "apply": {
         "SW2": [
+          "system-view",
           "interface GigabitEthernet0/0/1",
           "port default vlan 10",
           "quit"

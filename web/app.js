@@ -217,6 +217,7 @@ function showStep(id) {
   $("#hintBox").classList.add("hidden");
   $("#output").classList.add("hidden");
   $("#output").innerHTML = "";
+  $("#btnHint").textContent = "给我提示";
   const sym = $("#symptom");
   if (sym) {
     if (S.lab.mode === "troubleshoot" && S.lab.symptom) {
@@ -293,15 +294,18 @@ async function doBuild() {
   const r = await api("/api/lab/" + S.lab.id + "/build", {});
   S.busy = false; $("#btnBuild").disabled = false;
   if (!r.ok) return toast(r.error || "生成失败");
+  const busyHint = (r.busy_ports || []).length
+    ? `<br>注意：${r.busy_ports.join("、")} 这些端口还被上一次的设备占着，这次的 console 口已经帮你顺延到 ${r.busy_ports[r.busy_ports.length - 1] + 1} 开始。`
+    : "";
   if (r.opened) {
     if (S.calibrated) {
-      notice("拓扑已经生成，正在自动去点「启动」。如果设备没起来，回 eNSP 手动点一下，再点下面的「校准启动按钮」重新记一次位置。");
+      notice("拓扑已经生成，正在自动去点「启动」。如果设备没起来，回 eNSP 手动点一下，再点下面的「校准启动按钮」重新记一次位置。" + busyHint);
     } else {
-      notice("拓扑已经生成，eNSP 正在打开。在 eNSP 里点工具栏的 <b>启动</b>（或全选设备后右键启动），设备起来后上面的灯会变绿。<br>嫌每次都要点，就先用一次「校准启动按钮」，之后自动点。");
+      notice("拓扑已经生成，eNSP 正在打开。在 eNSP 里点工具栏的 <b>启动</b>（或全选设备后右键启动），设备起来后上面的灯会变绿。<br>嫌每次都要点，就先用一次「校准启动按钮」，之后自动点。" + busyHint);
     }
   } else {
     const p = String(r.topo).replace(/</g, "&lt;");
-    notice(`拓扑已生成：<code>${p}</code><br>eNSP 没有自动打开，用 eNSP 的 <b>文件 → 打开</b> 选它就行。右键这个 .topo 关联一次 eNSP，以后就能自动打开了。`);
+    notice(`拓扑已生成：<code>${p}</code><br>eNSP 没有自动打开，用 eNSP 的 <b>文件 → 打开</b> 选它就行。右键这个 .topo 关联一次 eNSP，以后就能自动打开了。` + busyHint);
   }
   renderDevices({ devices: r.devices });
   if (S.calibrated) {
@@ -409,14 +413,21 @@ async function doCheck() {
 
 async function doHint() {
   const s = currentStep(); if (!s) return;
+  const total = typeof s.hintTotal === "number" ? s.hintTotal : 3;
+  if (!total) return toast("这一步没有提示");
+  if (S.hintLevel >= total) return;
   S.hintLevel = Math.min(3, S.hintLevel + 1);
   const r = await api(`/api/lab/${S.lab.id}/step/${s.id}/hint`, { level: S.hintLevel });
   const box = $("#hintBox");
   box.classList.remove("hidden");
   box.innerHTML = "";
-  box.appendChild(el("span", "lv", ["提示 1 · 方向", "提示 2 · 思路", "提示 3 · 完整命令"][r.level - 1] || ""));
-  box.appendChild(document.createTextNode(r.hint || "这一步没有更多提示了。"));
-  if (S.hintLevel >= 3) $("#btnHint").textContent = "没有更多提示";
+  if (!r.hint) {
+    box.appendChild(document.createTextNode(r.note || "这一步没有更多提示了。"));
+    return;
+  }
+  box.appendChild(el("span", "lv", ["提示 1 · 方向", "提示 2 · 思路", "提示 3 · 完整命令"][r.level - 1] || "提示"));
+  box.appendChild(document.createTextNode(r.hint));
+  if (r.level >= (r.total || total)) $("#btnHint").textContent = "没有更多提示";
 }
 
 async function doDiagnose() {
@@ -841,8 +852,9 @@ function exportGrade(r) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "成绩单-" + S.lab.id + ".md";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 let kbCat = "";
@@ -894,11 +906,13 @@ async function loadKB() {
   if (r.cats) { S.kbCats = r.cats; kbRenderCats(r.cats); }
   renderKbSide();
   const box = $("#kbList");
+  if (!box) return;
   box.innerHTML = "";
   if (!r.items.length) {
     box.appendChild(el("div", "kb-empty", "没搜到，换个词试试"));
     return;
   }
+  const detail = $("#kbDetail");
   r.items.forEach((it, i) => {
     const d = el("div", "kb-item");
     const b = document.createElement("b");
@@ -908,7 +922,7 @@ async function loadKB() {
     d.appendChild(el("span", null, it.one || ""));
     d.onclick = () => openKBItem(it.id, d);
     box.appendChild(d);
-    if (i === 0 && !$("#kbDetail").dataset.loaded) openKBItem(it.id, d);
+    if (i === 0 && detail && !detail.dataset.loaded) openKBItem(it.id, d);
   });
 }
 
@@ -1095,7 +1109,7 @@ on("#btnSave", async () => {
   const bad = (r.report || []).filter((x) => !x.ok);
   toast(bad.length ? "有设备没存上：" + bad.map((b) => b.dev).join("、") : "全部保存成功");
 });
-on("#btnKB", openKB);
+on("#btnKB", () => openKB());
 on("#btnCourse", () => window.open("/course", "ensp-course"));
 on("#btnHelp", () => window.open("/help", "ensp-help"));
 on("#kbClose", () => $("#kbModal").classList.add("hidden"));

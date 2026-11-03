@@ -134,6 +134,11 @@ def gen_one(tid, title, level, cat, thinking=True):
     d.setdefault("pits", [])
     d.setdefault("qa", [])
     d.setdefault("syllabus", f"{level}-Datacom")
+    d.setdefault("one", "")
+    d.setdefault("analogy", "")
+    d.setdefault("body", "")
+    if not str(d["body"]).strip():
+        return None, "模型没写 body 正文"
     return d, ""
 
 
@@ -152,7 +157,7 @@ def run_one(tid, title, level, cat):
         return f"{tid}: 失败 {err[:80]}"
     with open(p, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
-    return f"{tid}: OK {round(time.time()-t,1)}s | {d['title']} | {len(d['body'])}字"
+    return f"{tid}: OK {round(time.time()-t,1)}s | {d['title']} | {len(str(d.get('body', '')))}字"
 
 
 def main():

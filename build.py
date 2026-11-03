@@ -29,10 +29,11 @@ pause
 """
 
 STOP = """@echo off
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 if exist "app\\app.pid" (
   set /p PID=<"app\\app.pid"
-  taskkill /PID %PID% /F >nul 2>&1
+  if defined PID taskkill /PID !PID! /F >nul 2>&1
   del "app\\app.pid" >nul 2>&1
 )
 exit
@@ -100,7 +101,7 @@ def main():
            "temperature": 0.4, "ensp_path": "", "vbox_path": ""}
     json.dump(cfg, open(os.path.join(app_dir, "config.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
-    os.makedirs(os.path.join(app_dir, "workspace"), exist_ok=True)
+    os.makedirs(os.path.join(app_dir, "workspace", "hist"), exist_ok=True)
 
     manual = os.path.join(BASE, "使用手册.md")
     if os.path.exists(manual):

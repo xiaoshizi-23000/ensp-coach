@@ -80,8 +80,10 @@
   },
   "inject": {
     "R1": [
+      "system-view",
       "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
-      "ip route-static 192.168.20.0 255.255.255.0 10.0.0.3"
+      "ip route-static 192.168.20.0 255.255.255.0 10.0.0.3",
+      "quit"
     ]
   },
   "steps": [
@@ -99,25 +101,29 @@
         {
           "dev": "R1",
           "cmd": "display ip routing-table 192.168.20.0",
-          "expect": "下一跳为 10.0.0.2"
+          "expect": "10.0.0.2"
         },
         {
-          "dev": "PC1",
-          "cmd": "ping 192.168.20.10",
-          "expect": "通"
+          "dev": "R1",
+          "cmd": "ping -c 3 192.168.20.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
         }
       ],
       "keep": [
         {
-          "dev": "PC1",
-          "cmd": "ping 192.168.10.1",
-          "expect": "通"
+          "dev": "R1",
+          "cmd": "ping -c 3 192.168.10.10",
+          "expect": "0.00% packet loss",
+          "timeout": 40
         }
       ],
       "apply": {
         "R1": [
+          "system-view",
           "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.3",
-          "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+          "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+          "quit"
         ]
       }
     }

@@ -80,6 +80,7 @@ function setTheme(t) {
   localStorage.setItem("theme", t);
 }
 setTheme(localStorage.getItem("theme") || "apple");
+$("#theme").onclick = () => setTheme(document.documentElement.dataset.theme === "apple" ? "huawei" : "apple");
 
 function goLab(id) {
   localStorage.setItem("lab", id);
@@ -159,11 +160,6 @@ async function api(p, b) {
   return (await fetch(p, o)).json();
 }
 
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  localStorage.setItem("theme", t);
-}
-setTheme(localStorage.getItem("theme") || "apple");
 boot();
 </script>
 </body>

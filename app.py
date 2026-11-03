@@ -21,9 +21,11 @@ LABS_DIR = os.path.join(BASE, "labs")
 KB_DIR = os.path.join(BASE, "kb")
 GEN_DIR = os.path.join(BASE, "workspace", "generated")
 WORK_DIR = os.path.join(BASE, "workspace")
+HIST_DIR = os.path.join(WORK_DIR, "hist")
 WEB_DIR = os.path.join(BASE, "web")
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(GEN_DIR, exist_ok=True)
+os.makedirs(HIST_DIR, exist_ok=True)
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -74,10 +76,11 @@ def get_lab(lab_id):
 
 
 def public_lab(lab):
-    d = dict(lab)
+    d = {k: v for k, v in lab.items() if k not in ("base", "inject")}
     d["steps"] = [
-        {k: v for k, v in s.items() if k not in ("apply", "hints", "check")}
-        | {"checks": len(s.get("check", []))}
+        {k: v for k, v in s.items() if k not in ("apply", "hints", "check", "keep")}
+        | {"checks": len(s.get("check", [])) + len(s.get("keep", []) or []),
+           "hintTotal": len(s.get("hints", []) or [])}
         for s in lab["steps"]
     ]
     return d
@@ -85,6 +88,22 @@ def public_lab(lab):
 
 def state_path(lab_id):
     return os.path.join(WORK_DIR, lab_id + ".state.json")
+
+
+def read_state(lab_id):
+    st = read_json(state_path(lab_id), None)
+    if not isinstance(st, dict):
+        return None
+    if not isinstance(st.get("ports"), dict):
+        st["ports"] = {}
+    devs = []
+    for d in st.get("devices") or []:
+        if not isinstance(d, dict) or not d.get("name"):
+            continue
+        d.setdefault("port", st["ports"].get(d["name"], 0) or 0)
+        devs.append(d)
+    st["devices"] = devs
+    return st
 
 
 def progress_path(lab_id):
@@ -98,6 +117,10 @@ PENALTY = {1: 0.05, 2: 0.12, 3: 0.22}
 
 def bump(lab_id, sid, kind, level=0):
     p = read_json(progress_path(lab_id), {"done": [], "spent": {}})
+    if not isinstance(p, dict):
+        p = {"done": [], "spent": {}}
+    if not isinstance(p.get("done"), list):
+        p["done"] = []
     p.setdefault("spent", {}).setdefault(sid, {})
     s = p["spent"][sid]
     if kind == "hint":
@@ -116,13 +139,15 @@ def penalty_of(s):
 
 
 def grade(lab):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境，交不了卷"}
-    if not any(probe(d["port"], 0.3) for d in st["devices"] if d["port"]):
+    if not any(probe(d["port"], 0.3) for d in st.get("devices", []) if d.get("port")):
         return {"ok": False, "error": "一台设备都没起来，先在 eNSP 里启动设备再交卷"}
     prog = read_json(progress_path(lab["id"]), {"done": [], "spent": {}})
-    steps = lab["steps"]
+    steps = lab.get("steps") or []
+    if not steps:
+        return {"ok": False, "error": "这个实验没有步骤，交不了卷"}
     per = 100.0 / len(steps)
     rows = []
     total = 0.0
@@ -259,18 +284,32 @@ def _kill_ensp():
         return False
 
 
+CMD_BAD = re.compile(r"Error:|Unrecognized command|Incomplete command|Wrong parameter|Too many parameters")
+
+AI_DENY = re.compile(
+    r"^\s*(reboot|reset\s+saved-configuration|reset\s+recycle-bin|factory-configuration\s+reset|"
+    r"startup\s+saved-configuration|delete\b|format\b|restore\b|undo\s+all\b|rollback\b|"
+    r"schedule\s+reboot)", re.I)
+
+
+def _bad_lines(line, out):
+    return [f"{line} → {ln.strip()}" for ln in str(out).splitlines() if CMD_BAD.search(ln)]
+
+
 def _push_cmds(port, cmds):
     c = Vrp("127.0.0.1", port, timeout=25)
     c.open()
     c.cmd("return", 6)
     c.cmd("screen-length 0 temporary", 6)
+    bad = []
     for line in cmds:
-        c.cmd(str(line).strip(), 20)
+        bad.extend(_bad_lines(str(line).strip(), c.cmd(str(line).strip(), 20)))
     c.close()
+    return bad
 
 
 def inject_lab(lab):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
     base = lab.get("base") or {}
@@ -284,36 +323,45 @@ def inject_lab(lab):
         for dev, cmds in base.items():
             port = st["ports"].get(dev)
             if not port or not probe(port, 0.3):
-                rep.append({"dev": dev, "ok": False, "error": "设备没起来"})
+                rep.append({"dev": dev, "ok": False, "error": "设备没起来", "phase": "base"})
                 continue
             try:
-                _push_cmds(port, cmds)
-                rep.append({"dev": dev, "ok": True, "phase": "base"})
+                bad = _push_cmds(port, cmds)
+                rep.append({"dev": dev, "ok": not bad, "phase": "base",
+                            "error": "；".join(bad)})
             except Exception as e:
-                rep.append({"dev": dev, "ok": False, "error": str(e)})
+                rep.append({"dev": dev, "ok": False, "error": str(e), "phase": "base"})
         if not all(r["ok"] for r in rep):
-            return {"ok": False, "report": rep}
+            return {"ok": False, "error": "基础配置没下发成功，先看 report", "report": rep}
         st["based"] = True
         write_json(state_path(lab["id"]), st)
         time.sleep(1)
     for dev, cmds in inject.items():
         port = st["ports"].get(dev)
         if not port or not probe(port, 0.3):
-            rep.append({"dev": dev, "ok": False, "error": "设备没起来"})
+            rep.append({"dev": dev, "ok": False, "error": "设备没起来", "phase": "inject"})
             continue
         try:
-            _push_cmds(port, cmds)
-            rep.append({"dev": dev, "ok": True, "phase": "inject"})
+            bad = _push_cmds(port, cmds)
+            rep.append({"dev": dev, "ok": not bad, "phase": "inject",
+                        "error": "；".join(bad)})
         except Exception as e:
-            rep.append({"dev": dev, "ok": False, "error": str(e)})
-    if all(r["ok"] for r in rep):
+            rep.append({"dev": dev, "ok": False, "error": str(e), "phase": "inject"})
+    ok = all(r["ok"] for r in rep)
+    if ok:
         st["injected"] = True
         write_json(state_path(lab["id"]), st)
-    return {"ok": all(r["ok"] for r in rep), "report": rep}
+    else:
+        bad_dev = "、".join(r["dev"] for r in rep if not r["ok"])
+        return {"ok": False, "error": f"故障注入失败（{bad_dev}），命令被设备拒了", "report": rep}
+    return {"ok": True, "report": rep}
 
 
 def build(lab):
-    xml, devices = build_topo(lab)
+    # 上一次没退干净的设备还占着 2000+ 的 console 口时，从最大的那个端口后面开始分配，避免端口打架
+    busy = [p for p in range(2000, 2101) if probe(p, 0.03)]
+    base_port = (max(busy) + 1) if busy else 2000
+    xml, devices = build_topo(lab, base_port)
     path = os.path.join(WORK_DIR, lab["id"] + ".topo")
     with open(path, "w", encoding="gb18030", newline="\r\n") as f:
         f.write(xml)
@@ -324,11 +372,11 @@ def build(lab):
         "built_at": time.time(),
         "devices": [{"name": d["name"], "model": d["model"], "port": d["com_port"]} for d in devices],
         "ports": ports,
+        "busy_ports": busy,
     }
     write_json(state_path(lab["id"]), st)
     opened = False
     if not os.environ.get("ENSP_LAB_NO_OPEN"):
-        busy = [p for p in range(2000, 2011) if probe(p, 0.08)]
         if _ensp_running() and not busy:
             _kill_ensp()
         try:
@@ -355,14 +403,14 @@ def probe(port, timeout=0.5):
 
 def status(lab_id):
     st = read_json(state_path(lab_id), None)
-    if not st:
+    if not st or not isinstance(st.get("devices"), list):
         return {"built": False, "devices": []}
     devs = []
     for d in st["devices"]:
-        devs.append(dict(d, up=probe(d["port"])))
+        devs.append(dict(d, up=probe(d.get("port"))))
     up = sum(1 for d in devs if d["up"])
-    return {"built": True, "topo": st["topo"], "devices": devs, "up": up,
-            "total": sum(1 for d in devs if d["port"])}
+    return {"built": True, "topo": st.get("topo", ""), "devices": devs, "up": up,
+            "total": sum(1 for d in devs if d.get("port"))}
 
 
 def console(port, cmds, ready_timeout=25):
@@ -377,25 +425,32 @@ def console(port, cmds, ready_timeout=25):
 
 
 def hist_path(lab_id):
-    return os.path.join(WORK_DIR, "hist", lab_id + ".json")
+    return os.path.join(HIST_DIR, lab_id + ".json")
 
 
 def record_hist(lab_id, entries):
+    if not entries:
+        return False
     try:
+        os.makedirs(HIST_DIR, exist_ok=True)
         d = read_json(hist_path(lab_id), [])
+        if not isinstance(d, list):
+            d = []
         d.extend(entries)
         write_json(hist_path(lab_id), d[-400:])
-    except Exception:
-        pass
+        return True
+    except Exception as e:
+        print(f"[hist] 写历史失败 {lab_id}: {e}", file=sys.stderr)
+        return False
 
 
 def run_checks(lab, step, record=True, source="check"):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "环境还没搭，先点「一键搭建」"}
     if lab.get("mode") == "troubleshoot" and lab.get("inject") and not st.get("injected"):
         inject_lab(lab)
-        st = read_json(state_path(lab["id"]), st) or st
+        st = read_state(lab["id"]) or st
     results = []
     cks = list(step.get("check", [])) + [dict(x, keep=True) for x in step.get("keep", [])]
     for ck in cks:
@@ -441,7 +496,9 @@ def run_checks(lab, step, record=True, source="check"):
         if ent:
             record_hist(lab["id"], ent)
     if ok and record:
-        prog = read_json(progress_path(lab["id"]), {"done": []})
+        prog = read_json(progress_path(lab["id"]), {"done": [], "spent": {}})
+        if not isinstance(prog, dict) or not isinstance(prog.get("done"), list):
+            prog = {"done": [], "spent": {}}
         if step["id"] not in prog["done"]:
             prog["done"].append(step["id"])
         write_json(progress_path(lab["id"]), prog)
@@ -449,7 +506,7 @@ def run_checks(lab, step, record=True, source="check"):
 
 
 def apply_step(lab, step):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "环境还没搭"}
     plan = step.get("apply", {})
@@ -466,10 +523,7 @@ def apply_step(lab, step):
             c.cmd("screen-length 0 temporary", 6)
             bad = []
             for line in cmds:
-                out = c.cmd(line, 30)
-                for ln in out.splitlines():
-                    if re.search(r"Error:|Unrecognized command|Incomplete command|Wrong parameter", ln):
-                        bad.append(f"{line} → {ln.strip()}")
+                bad.extend(_bad_lines(str(line).strip(), c.cmd(str(line).strip(), 30)))
             c.close()
             report.append({"dev": dev, "ok": not bad, "message": "" if not bad else "；".join(bad)})
         except Exception as e:
@@ -478,7 +532,7 @@ def apply_step(lab, step):
 
 
 def ai_apply(lab, step):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "环境还没搭"}
     plan = step.get("apply", {})
@@ -532,10 +586,25 @@ def ai_apply(lab, step):
                            if isinstance(v, list) and d in plan and len(v) < 80}
         except Exception:
             ai_plan = None
+    blocked = []
+    if ai_plan:
+        safe = {}
+        for dev, cmds in ai_plan.items():
+            keep = []
+            for c in cmds:
+                if AI_DENY.match(c):
+                    blocked.append(f"{dev}: {c}")
+                else:
+                    keep.append(c)
+            if keep:
+                safe[dev] = keep
+        ai_plan = safe or None
     if not ai_plan:
         r2 = apply_step(lab, step)
         r2["ai"] = False
         r2["note"] = "AI 没给出可用方案，已按标准配置执行"
+        if blocked:
+            r2["blocked"] = blocked
         return r2
 
     report = []
@@ -551,10 +620,7 @@ def ai_apply(lab, step):
             c.cmd("screen-length 0 temporary", 6)
             bad = []
             for line in cmds:
-                out = c.cmd(str(line).strip(), 30)
-                for ln in out.splitlines():
-                    if re.search(r"Error:|Unrecognized command|Incomplete command|Wrong parameter", ln):
-                        bad.append(f"{line} → {ln.strip()}")
+                bad.extend(_bad_lines(str(line).strip(), c.cmd(str(line).strip(), 30)))
             c.close()
             report.append({"dev": dev, "ok": not bad, "message": "" if not bad else "；".join(bad),
                            "cmds": cmds})
@@ -564,7 +630,7 @@ def ai_apply(lab, step):
     time.sleep(1)
     d2 = diff_step(lab, step)
     return {"ok": all(r["ok"] for r in report), "ai": True, "report": report, "diff": d2,
-            "plan": ai_plan}
+            "plan": ai_plan, "blocked": blocked}
 
 
 JOBS = {}
@@ -658,7 +724,7 @@ def start_autoplay(lab_id):
 
 
 def discover_ports(lab):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
     found = []
@@ -697,12 +763,15 @@ def discover_ports(lab):
 
 
 def save_all(lab):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
-    report = []
+    report, skipped = [], []
     for name, port in st["ports"].items():
-        if not port or not probe(port):
+        if not port:
+            skipped.append({"dev": name, "message": "没有命令行口（PC 这类设备不需要保存）"})
+            continue
+        if not probe(port):
             report.append({"dev": name, "ok": False, "message": "设备没起来"})
             continue
         try:
@@ -719,7 +788,7 @@ def save_all(lab):
             report.append({"dev": name, "ok": good, "message": "" if good else out.strip()[-120:]})
         except Exception as e:
             report.append({"dev": name, "ok": False, "message": str(e)})
-    return {"ok": all(r["ok"] for r in report), "report": report}
+    return {"ok": all(r["ok"] for r in report), "report": report, "skipped": skipped}
 
 
 def mermaid(lab):
@@ -814,6 +883,7 @@ def calibrate_capture(wait=3):
                 "window": [left, top, w, h]}
     cfg = _load_cfg()
     cfg["start_offset"] = [dx, dy]
+    cfg["start_offset_rect"] = [w, h]
     cfg["start_offset_at"] = time.time()
     write_json(_cfg_path(), cfg)
     return {"ok": True, "offset": [dx, dy], "window": [left, top, w, h]}
@@ -986,15 +1056,19 @@ def _click_start(offset=None):
 
 
 def current_state():
-    files = [f for f in os.listdir(WORK_DIR) if f.endswith(".state.json")]
+    files = [f for f in os.listdir(WORK_DIR) if f.endswith(".state.json")] if os.path.isdir(WORK_DIR) else []
     if not files:
         return None
-    newest = max(files, key=lambda f: os.path.getmtime(os.path.join(WORK_DIR, f)))
-    return read_json(os.path.join(WORK_DIR, newest), None)
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(WORK_DIR, f)), reverse=True)
+    for f in files:
+        st = read_state(f[:-len(".state.json")])
+        if st and st.get("devices"):
+            return st
+    return None
 
 
 def start_all_devices(lab_id=None, wait=True, click=False, timeout=150, offset=None):
-    st = read_json(state_path(lab_id), None) if lab_id else current_state()
+    st = read_state(lab_id) if lab_id else current_state()
     if not st:
         return {"ok": False, "error": "环境还没搭，先建拓扑"}
     ports = [d for d in st["devices"] if d["port"]]
@@ -1071,12 +1145,21 @@ def open_mini_window(port=7317):
     if not exe:
         return {"ok": False, "error": "没找到 Edge 或 Chrome，直接用浏览器开 /mini 也行"}
 
+    u = ctypes.windll.user32
+    u.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    u.SetWindowPos.restype = wintypes.BOOL
+    u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    u.GetWindowLongW.restype = ctypes.c_long
+    SWP = 0x0040 | 0x0010
+
     win = _find_mini_hwnd()
     if win:
-        u = ctypes.windll.user32
-        u.ShowWindow(win[0], 9)
-        u.SetWindowPos(win[0], -1, win[1], win[2], 430, 780, 0x0040)
-        return {"ok": True, "reused": True}
+        u.ShowWindow(wintypes.HWND(win[0]), 9)
+        u.SetWindowPos(wintypes.HWND(win[0]), wintypes.HWND(-1), win[1], win[2],
+                       430, 780, SWP)
+        return {"ok": True, "reused": True,
+                "topmost": bool(u.GetWindowLongW(wintypes.HWND(win[0]), -20) & 0x8)}
 
     import subprocess
     import tempfile
@@ -1103,22 +1186,17 @@ def open_mini_window(port=7317):
         x = min(max(0, ensp[1] + ensp[3] - 440), max(0, scr_w - 440))
         y = max(0, ensp[2] + 40)
 
-    u = ctypes.windll.user32
-    u.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
-                               ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
-    u.SetWindowPos.restype = wintypes.BOOL
-    SWP = 0x0040 | 0x0010
     for _ in range(6):
         u.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(-1), x, y, 430, 780, SWP)
         time.sleep(0.35)
-        if u.GetWindowLongW(hwnd, -20) & 0x8:
+        if u.GetWindowLongW(wintypes.HWND(hwnd), -20) & 0x8:
             break
-    top = bool(u.GetWindowLongW(hwnd, -20) & 0x8)
+    top = bool(u.GetWindowLongW(wintypes.HWND(hwnd), -20) & 0x8)
     return {"ok": True, "reused": False, "topmost": top, "at": [x, y], "hwnd": hwnd}
 
 
 def collect_snapshot(lab, limit=2200):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {}
     out = {}
@@ -1273,6 +1351,13 @@ def norm_line(line):
     return s
 
 
+def if_key(name):
+    """接口名归一化：去掉空格、统一小写、展开常见缩写，让 Vlanif 10 / Vlanif10、GE0/0/1 / GigabitEthernet0/0/1 能对上。"""
+    s = re.sub(r"\s+", "", str(name)).lower()
+    s = s.replace("gigabitethernet", "ge").replace("ethernet", "eth")
+    return "if:" + s
+
+
 def expected_from_apply(cmds):
     out = {"system": []}
     ctx = "system"
@@ -1285,14 +1370,11 @@ def expected_from_apply(cmds):
             ctx = "system"
             continue
         if low.startswith("interface "):
-            ctx = "if:" + c.split(None, 1)[1].strip()
+            ctx = if_key(c.split(None, 1)[1].strip())
             out.setdefault(ctx, [])
             continue
         if low in ("quit", "return"):
-            if low == "return":
-                ctx = "system"
-            else:
-                ctx = "system"
+            ctx = "system"
             continue
         if low.startswith("undo "):
             continue
@@ -1312,7 +1394,7 @@ def parse_device_config(text):
             ctx = "system"
             continue
         if st.lower().startswith("interface "):
-            ctx = "if:" + st.split(None, 1)[1].strip()
+            ctx = if_key(st.split(None, 1)[1].strip())
             out.setdefault(ctx, [])
             continue
         if any(st.lower().startswith(n) for n in NOISE):
@@ -1322,7 +1404,7 @@ def parse_device_config(text):
 
 
 def diff_step(lab, step):
-    st = read_json(state_path(lab["id"]), None)
+    st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
     plan = step.get("apply") or {}
@@ -1342,23 +1424,47 @@ def diff_step(lab, step):
         want = expected_from_apply(cmds)
         have = parse_device_config(text)
         have_all = {ln for v in have.values() for ln in v}
-        batch_vlans = set()
-        for ln in have_all:
-            m2 = re.fullmatch(r"vlan batch (.+)", ln)
-            if m2:
-                batch_vlans.update(m2.group(1).split())
+
+        disp = {"system": ""}
+        for c in cmds:
+            cc = str(c).strip()
+            if cc.lower().startswith("interface "):
+                nm = cc.split(None, 1)[1].strip()
+                disp[if_key(nm)] = nm + " → "
+
+        def where_of(ctx):
+            return disp.get(ctx, ctx.replace("if:", "") + " → ")
+
+        def vlan_sets(lines):
+            batch, single = set(), set()
+            for ln in lines:
+                m2 = re.fullmatch(r"vlan batch (.+)", ln)
+                if m2:
+                    batch.update(m2.group(1).split())
+                    continue
+                m2 = re.fullmatch(r"vlan (\d+)", ln)
+                if m2:
+                    single.add(m2.group(1))
+            return batch, single
+
+        have_batch, have_single = vlan_sets(have_all)
         missing, extra, hit = [], [], 0
         for ctx, lines in want.items():
+            # 接口级命令只在同一个接口里比对；系统级命令允许在整个配置里找
+            scope = set(have.get(ctx, [])) if ctx.startswith("if:") else have_all
             for ln in lines:
                 mv = re.fullmatch(r"vlan (\d+)", ln)
-                if mv and mv.group(1) in batch_vlans:
+                if mv and mv.group(1) in have_batch:
                     hit += 1
                     continue
-                if ln in have_all:
+                mb = re.fullmatch(r"vlan batch (.+)", ln)
+                if mb and set(mb.group(1).split()) <= (have_batch | have_single):
+                    hit += 1
+                    continue
+                if ln in scope:
                     hit += 1
                 else:
-                    where = "" if ctx == "system" else ctx.replace("if:", "") + " → "
-                    missing.append(where + ln)
+                    missing.append(where_of(ctx) + ln)
         touched = [c for c in want if c.startswith("if:")]
         for ctx in touched:
             allow = set(want.get(ctx, []))
@@ -1367,7 +1473,7 @@ def diff_step(lab, step):
                     continue
                 if any(ln.lower().startswith(n) for n in NOISE):
                     continue
-                extra.append(ctx.replace("if:", "") + " → " + ln)
+                extra.append(where_of(ctx) + ln)
         reports.append({"dev": dev, "ok": True, "hit": hit, "total": sum(len(v) for v in want.values()),
                         "missing": missing, "extra": extra})
     return {"ok": True, "reports": reports}
@@ -1378,7 +1484,7 @@ QUIZ_DIR = os.path.join(BASE, "quiz")
 
 def review_data():
     from collections import Counter
-    hdir = os.path.join(WORK_DIR, "hist")
+    hdir = HIST_DIR
     lab_title = {l["id"]: l["title"] for l in list_labs()}
     checks, grades, quiz = [], [], []
     if os.path.isdir(hdir):
@@ -1474,9 +1580,10 @@ def course_data(track=None):
     if not cur:
         return {"ok": False, "error": "路线是空的"}
     grades = read_json(GRADES, {})
-    hdir = os.path.join(WORK_DIR, "hist")
-    quiz_hist = read_json(os.path.join(hdir, "quiz.json"), [])
-    q_ok = {e.get("quiz") for e in quiz_hist if e.get("out") == "对"}
+    quiz_hist = read_json(os.path.join(HIST_DIR, "quiz.json"), [])
+    if not isinstance(quiz_hist, list):
+        quiz_hist = []
+    q_ok = {e.get("quiz") for e in quiz_hist if isinstance(e, dict) and e.get("out") == "对"}
     stages = []
     for s in cur.get("stages", []):
         labs = []
@@ -1530,8 +1637,12 @@ class Handler(BaseHTTPRequestHandler):
             lab = get_lab(m.group(1))
             if not lab:
                 return self.send_json({"ok": False, "error": "没有这个实验"}, 404)
-            return self.send_json({"ok": True, "lab": public_lab(lab),
-                                   "progress": read_json(progress_path(lab["id"]), {"done": []})})
+            prog = read_json(progress_path(lab["id"]), {"done": [], "spent": {}})
+            if not isinstance(prog, dict):
+                prog = {"done": [], "spent": {}}
+            if not isinstance(prog.get("done"), list):
+                prog["done"] = []
+            return self.send_json({"ok": True, "lab": public_lab(lab), "progress": prog})
         if path == "/api/labs":
             return self.send_json({"ok": True, "labs": list_labs(),
                                    "ai": ai.ready(),
@@ -1694,9 +1805,13 @@ class Handler(BaseHTTPRequestHandler):
             if action == "inject":
                 return self.send_json(inject_lab(lab))
             if action == "start":
+                try:
+                    wait_t = max(10, int(data.get("timeout") or 150))
+                except (TypeError, ValueError):
+                    wait_t = 150
                 return self.send_json({"ok": True, **start_all_devices(
                     lab_id=lab["id"], wait=data.get("wait", True),
-                    click=data.get("click", False), timeout=int(data.get("timeout", 150)))})
+                    click=data.get("click", False), timeout=wait_t)})
             if action == "grade":
                 return self.send_json(grade(lab))
             if action == "autoplay":
@@ -1711,11 +1826,13 @@ class Handler(BaseHTTPRequestHandler):
                 if lab.get("source") != "ai":
                     return self.send_json({"ok": False, "error": "经典实验不能删"})
                 for p in (os.path.join(GEN_DIR, lab["id"] + ".json"), state_path(lab["id"]),
-                          progress_path(lab["id"]), os.path.join(WORK_DIR, lab["id"] + ".topo")):
+                          progress_path(lab["id"]), hist_path(lab["id"]),
+                          os.path.join(WORK_DIR, lab["id"] + ".topo")):
                     try:
                         os.remove(p)
                     except OSError:
                         pass
+                JOBS.pop(lab["id"], None)
                 return self.send_json({"ok": True})
             if action == "step" and len(parts) >= 6:
                 step = next((s for s in lab["steps"] if s["id"] == parts[4]), None)
@@ -1728,21 +1845,31 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[5] == "check":
                     return self.send_json(run_checks(lab, step))
                 if parts[5] == "hint":
-                    level = max(1, min(3, int(data.get("level", 1))))
+                    try:
+                        level = int(data.get("level", 1))
+                    except (TypeError, ValueError):
+                        level = 1
+                    hints = step.get("hints") or []
+                    if not hints:
+                        return self.send_json({"ok": True, "level": 0, "hint": "",
+                                               "total": 0, "note": "这一步没有提示"})
+                    level = max(1, min(min(3, len(hints)), level))
                     bump(lab["id"], step["id"], "hint", level)
-                    hints = step.get("hints", [])
                     return self.send_json({"ok": True, "level": level,
-                                           "hint": hints[level - 1] if len(hints) >= level else "",
+                                           "hint": hints[level - 1],
                                            "total": len(hints)})
                 if parts[5] == "answer":
                     bump(lab["id"], step["id"], "answer")
                     return self.send_json({"ok": True, "answer": step.get("apply", {})})
                 if parts[5] == "apply":
-                    bump(lab["id"], step["id"], "apply")
                     if (data.get("mode") or "") == "ai":
-                        return self.send_json(ai_apply(lab, step))
-                    r = apply_step(lab, step)
-                    r["ai"] = False
+                        r = ai_apply(lab, step)
+                    else:
+                        r = apply_step(lab, step)
+                        r["ai"] = False
+                    # 只有真的下发成功（至少一台设备接受了命令）才记代做扣分
+                    if r.get("ok") or any(x.get("ok") for x in r.get("report", []) or []):
+                        bump(lab["id"], step["id"], "apply")
                     return self.send_json(r)
         return self.send_json({"ok": False, "error": "no route"}, 404)
 
@@ -1764,7 +1891,7 @@ class Handler(BaseHTTPRequestHandler):
                 h3 = (step.get("hints") or [None, None, None])[2]
                 if h3:
                     ctx.append("第三级提示里的完整命令：\n" + str(h3)[:800])
-            st = read_json(state_path(lab["id"]), None)
+            st = read_state(lab["id"])
             if st and st.get("devices"):
                 snap = []
                 for d in st["devices"]:

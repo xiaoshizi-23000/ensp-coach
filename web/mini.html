@@ -102,6 +102,11 @@ async function boot() {
 async function openLab(id) {
   if (!id) return;
   const r = await api("/api/lab/" + id);
+  if (!r || !r.ok || !r.lab) {
+    $("#labTitle").textContent = "实验加载失败";
+    $("#labSub").textContent = (r && r.error) || "回主界面重新选一个实验";
+    return;
+  }
   S.lab = r.lab; S.done = (r.progress && r.progress.done) || [];
   localStorage.setItem("lab", id);
   $("#labPick").value = id;
@@ -168,11 +173,14 @@ async function check() {
 
 async function hint() {
   if (!S.step) return;
+  const total = typeof S.step.hintTotal === "number" ? S.step.hintTotal : 3;
+  if (S.hintLevel >= total) return;
   S.hintLevel = Math.min(3, S.hintLevel + 1);
   const r = await api(`/api/lab/${S.lab.id}/step/${S.step.id}/hint`, { level: S.hintLevel });
   const h = $("#hint");
   h.classList.remove("hidden");
-  h.textContent = ["① ", "② ", "③ "][r.level - 1] + (r.hint || "");
+  if (!r.hint) { h.textContent = r.note || "这一步没有更多提示了。"; return; }
+  h.textContent = ["① ", "② ", "③ "][r.level - 1] + r.hint;
 }
 
 async function grade() {

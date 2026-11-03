@@ -1,4 +1,5 @@
 import argparse
+import codecs
 import json
 import os
 import re
@@ -188,7 +189,7 @@ def build_topo(lab, base_port=2000):
 PROMPT = re.compile(r"[<\[][^<>\r\n\[\]]{1,60}[>\]]\s*$")
 
 
-def clean(raw):
+def strip_iac(raw):
     out, i = bytearray(), 0
     while i < len(raw):
         if raw[i] == 255 and i + 2 < len(raw):
@@ -202,7 +203,11 @@ def clean(raw):
                 continue
         out.append(raw[i])
         i += 1
-    return out.decode("gb18030", "replace")
+    return bytes(out)
+
+
+def clean(raw):
+    return strip_iac(raw).decode("gb18030", "replace")
 
 
 class Vrp:
@@ -210,8 +215,11 @@ class Vrp:
         self.host, self.port, self.timeout = host, port, timeout
         self.s = None
         self.buf = ""
+        # 增量解码：汉字被 TCP 分包切开时不会变成乱码
+        self._dec = codecs.getincrementaldecoder("gb18030")("replace")
 
     def open(self):
+        self._dec.reset()
         self.s = socket.create_connection((self.host, self.port), timeout=5)
         self.s.sendall(b"\r")
         return self.read(self.timeout)
@@ -224,6 +232,7 @@ class Vrp:
         except (socket.timeout, OSError):
             pass
         self.buf = ""
+        self._dec.reset()
 
     def read(self, timeout):
         end = time.time() + timeout
@@ -237,7 +246,7 @@ class Vrp:
             except OSError:
                 break
             if chunk:
-                self.buf += clean(chunk)
+                self.buf += self._dec.decode(strip_iac(chunk))
                 idle = time.time()
                 if "---- More ----" in self.buf:
                     self.s.sendall(b" ")
@@ -246,7 +255,8 @@ class Vrp:
             tail = self.buf.rstrip()
             if tail and PROMPT.search(tail[-120:]):
                 break
-            if tail and time.time() - idle > 1.2:
+            # ping / tracert 这类命令输出是每隔一秒来一行，1.2 秒太短会截断，等久一点
+            if tail and time.time() - idle > 2.5:
                 break
         text, self.buf = self.buf, ""
         return text

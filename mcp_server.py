@@ -37,7 +37,6 @@ def err(msg):
 
 @tool("ensp_status", "看当前环境：eNSP 装没装、实验搭没搭、哪些设备的 console 口活着。开工前先调它。")
 def t_status(_):
-    st = app.read_json(os.path.join(app.WORK_DIR, "state.json"), None)
     labs = app.list_labs()
     out = {"labs": [{"id": l["id"], "title": l["title"], "steps": l["steps"], "source": l["source"]}
                     for l in labs]}
@@ -82,9 +81,10 @@ def t_build(args):
 
 @tool("ensp_start_devices",
       "点 eNSP 工具栏的启动按钮，把所有设备启动起来，然后轮询控制台端口直到全部就绪。需要 eNSP 已经打开了拓扑。",
-      {"wait": {"type": "boolean", "description": "是否等到所有端口都开（默认 true）"}})
+      {"wait": {"type": "boolean", "description": "是否等到所有端口都开（默认 true）"},
+       "lab_id": {"type": "string", "description": "哪个实验的拓扑，不填就用最近搭的那个"}})
 def t_start(args):
-    r = app.start_all_devices(wait=args.get("wait", True))
+    r = app.start_all_devices(lab_id=args.get("lab_id") or None, wait=args.get("wait", True))
     return ok(r) if r.get("ok") else err(r.get("error"))
 
 

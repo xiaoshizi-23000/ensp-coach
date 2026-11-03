@@ -79,12 +79,14 @@
 const $ = (s) => document.querySelector(s);
 const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 let cat = new URLSearchParams(location.search).get("cat") || "";
+let items = [];
 
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
   localStorage.setItem("theme", t);
 }
 setTheme(localStorage.getItem("theme") || "apple");
+$("#theme").onclick = () => setTheme(document.documentElement.dataset.theme === "apple" ? "huawei" : "apple");
 
 async function api(p, b) {
   const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
@@ -98,16 +100,17 @@ async function loadList() {
   cats.innerHTML = "";
   [""].concat(r.cats || []).forEach((c) => {
     const b = el("button", c === cat ? "on" : "", c || "全部");
-    b.onclick = () => { cat = c; load(); };
+    b.onclick = () => { cat = c; loadList(); };
     cats.appendChild(b);
   });
   const box = $("#quizList");
   box.innerHTML = "";
-  if (!(r.items || []).length) {
+  items = r.items || [];
+  if (!items.length) {
     box.appendChild(el("div", "kbs-empty", "还没题目"));
     return;
   }
-  r.items.forEach((it) => {
+  items.forEach((it) => {
     const d = el("div", "kb-item");
     const b = document.createElement("b");
     b.appendChild(document.createTextNode(it.title || ""));
@@ -117,7 +120,7 @@ async function loadList() {
     d.onclick = () => openQuiz(it.id, d);
     box.appendChild(d);
   });
-  if ((r.items || [])[0]) openQuiz(r.items[0].id, box.firstChild);
+  if (items[0]) openQuiz(items[0].id, box.firstChild);
 }
 
 async function openQuiz(id, node) {
@@ -224,12 +227,6 @@ $("#tabRev").onclick = () => {
   $("#tabRev").classList.add("on"); $("#tabDo").classList.remove("on");
   showReview();
 };
-
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  localStorage.setItem("theme", t);
-}
-setTheme(localStorage.getItem("theme") || "apple");
 
 loadList();
 </script>

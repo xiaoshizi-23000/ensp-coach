@@ -132,7 +132,8 @@ def main():
             print(tid, "失败", err[:90])
             continue
         opts = d.get("options", [])
-        if len(opts) != 4 or sum(1 for o in opts if o.get("ok")) != 1:
+        if (not isinstance(opts, list) or len(opts) != 4
+                or sum(1 for o in opts if isinstance(o, dict) and o.get("ok")) != 1):
             print(tid, "选项校验不过，跳过")
             continue
         json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)

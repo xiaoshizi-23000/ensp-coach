@@ -176,6 +176,9 @@ def validate(lab):
         e.append("至少要有一条链路")
         links = []
     for l in links:
+        if not isinstance(l, dict):
+            e.append(f"链路 {l!r} 不是对象，要写成 a/aPort/b/bPort")
+            continue
         for side in ("a", "b"):
             if l.get(side) not in names:
                 e.append(f"链路引用了不存在的设备 {l.get(side)}")
@@ -259,17 +262,21 @@ def generate(brief):
                         system=SYSTEM, json_mode=False, temperature=0.3, timeout=240, max_tokens=16384)
             if not r["ok"]:
                 return r
+        content = r.get("content") or ""
+        if not content.strip():
+            errors = ["模型两次都返回空内容"]
+            continue
         if r.get("finish") == "length":
-            msgs += [{"role": "assistant", "content": r["content"]},
+            msgs += [{"role": "assistant", "content": content},
                      {"role": "user", "content": "你上次的输出因为太长被截断了。把 hints 和 brief 精简一些，"
                       "重新输出完整 JSON。"}]
             errors = ["输出超长被截断"]
             continue
-        raw = strip_fence(r["content"])
+        raw = strip_fence(content)
         try:
             lab = json.loads(raw)
         except Exception as ex:
-            msgs += [{"role": "assistant", "content": r["content"]},
+            msgs += [{"role": "assistant", "content": content},
                      {"role": "user", "content": f"这不是合法 JSON：{ex}。重新输出完整 JSON，不要别的文字。"}]
             errors = ["输出的不是合法 JSON"]
             continue
@@ -277,6 +284,6 @@ def generate(brief):
         if not errs:
             return {"ok": True, "lab": finalize(lab)}
         errors = errs
-        msgs += [{"role": "assistant", "content": r["content"]},
+        msgs += [{"role": "assistant", "content": content},
                  {"role": "user", "content": "这个实验包有这些问题：\n- " + "\n- ".join(errs) + "\n修好后只输出完整 JSON。"}]
     return {"ok": False, "error": "生成了三次都没过校验：" + "；".join(errors[:5])}
