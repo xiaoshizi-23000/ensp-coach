@@ -376,6 +376,11 @@ button{font:inherit;color:inherit;cursor:pointer}
 .kb-md code{background:var(--code);border:1px solid var(--line);border-radius:4px;
   padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--accent)}
 .kb-md b{font-weight:600}
+.kb-md table{border-collapse:collapse;margin:10px 0;width:100%}
+.kb-md th,.kb-md td{border:1px solid var(--line);padding:6px 10px;font-size:12.5px;
+  text-align:left;line-height:1.7}
+.kb-md th{background:var(--panel2);font-weight:500;color:var(--text)}
+.kb-md tr:nth-child(even) td{background:var(--panel2)}
 .kb-sec{margin-top:20px;padding-top:14px;border-top:1px solid var(--line)}
 .kb-sec h5{margin:0 0 8px;font-size:11px;letter-spacing:1.2px;color:var(--faint);font-weight:400}
 .kb-cmds{display:flex;flex-direction:column;gap:5px}

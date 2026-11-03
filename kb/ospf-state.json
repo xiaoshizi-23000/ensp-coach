@@ -4,9 +4,8 @@
   "level": "HCIP",
   "cat": "路由",
   "keys": [
-    "OSPF",
-    "邻居状态机",
-    "Neighbor State Machine",
+    "OSPF 邻居状态",
+    "Neighbor State",
     "FSM",
     "Down",
     "Init",
@@ -14,37 +13,43 @@
     "ExStart",
     "Exchange",
     "Loading",
-    "Full"
+    "Full",
+    "邻居状态机"
   ],
-  "one": "OSPF 邻居建立过程中经历的八个状态，反映邻接关系的进展。",
-  "analogy": "就像两个人从陌生到成为搭档：先互相看见（Down→Init），确认眼神（2-Way），商量谁先发言（ExStart），交换各自掌握的线索（Exchange），消化对方给的资料（Loading），最后达成完全同步（Full）。每一步都得按顺序来，跳步就会出问题。",
-  "body": "## 为什么需要状态机\n\nOSPF 是链路状态协议，路由器之间必须先建立可靠的邻接关系，才能交换 LSA 并同步 LSDB。邻居状态机（Neighbor State Machine）定义了从初始到完全邻接的八个阶段，每个阶段有明确的进入条件和报文交互，确保双方能力协商、数据库同步有序进行。状态机也是排错的核心依据：`display ospf peer` 看到的状态直接告诉你卡在哪一步。\n\n## 八个状态详解\n\n### 1. Down\n初始状态，未收到任何 Hello 报文。路由器在接口上启用 OSPF 后，会周期性（默认 10s，NBMA 30s）发送 Hello。收到 Hello 后进入 Init。\n\n### 2. Init\n收到对方的 Hello，但对方 Hello 的邻居列表中没有自己的 Router ID。说明对方还没收到我的 Hello（单向通信）。此时应检查链路连通性、接口是否 up、认证是否一致。\n\n### 3. 2-Way\n收到的 Hello 邻居列表中包含自己的 Router ID，表示双向通信已建立。这是稳定状态，但不是所有邻居都进入 Full：在广播网络中，非 DR/BDR 之间停留在 2-Way，只有 DR/BDR 与其他路由器建立 Full 邻接。\n\n### 4. ExStart\n开始协商主从关系（Master/Slave），用于确定 DD 报文的序列号。双方发送空的 DD 报文（不携带 LSA 头），其中包含 Initial Sequence Number、I/M/MS 位。Router ID 大的一方成为 Master，使用自己的序列号。此状态卡住常见于 MTU 不一致（华为设备默认不检查 MTU，但某些厂商会检查）或 ACL 过滤了 DD 报文。\n\n### 5. Exchange\n主从关系确定后，双方交换包含 LSA 头部的 DD 报文，描述本地 LSDB 的摘要。DD 报文有序列号和 Flags（I、M、MS），确保可靠传输。Exchange 完成后，双方知道对方有哪些 LSA 自己没有。\n\n### 6. Loading\n根据 Exchange 阶段得到的摘要，向对方发送 LSR（Link State Request）请求缺失的完整 LSA，对方用 LSU 回应，收到后发送 LSAck 确认。此状态卡住通常是因为 LSR/LSU 报文丢失或 MTU 问题导致大包丢弃。\n\n### 7. Full\n双方 LSDB 完全同步，邻接关系建立完成。此时可以开始 SPF 计算。只有 Full 状态的邻居才参与路由计算。\n\n### 8. 其他状态\n- **Attempt**：仅用于 NBMA 网络，表示已向邻居发送 Hello 但未收到回应，需手动配置邻居。\n- **Down**：如果邻居失效（Dead Timer 超时），状态回到 Down。\n\n## 状态迁移与报文对应\n\n| 状态 | 触发事件 | 关键报文 |\n|------|----------|----------|\n| Down | 收到 Hello | Hello |\n| Init | Hello 中看到自己 | Hello |\n| 2-Way | 双向通信确认 | Hello |\n| ExStart | 开始协商主从 | DD (空) |\n| Exchange | 主从确定，交换摘要 | DD (带 LSA 头) |\n| Loading | 请求完整 LSA | LSR/LSU/LSAck |\n| Full | LSDB 同步完成 | - |\n\n## 设计取舍\n\n- **为什么需要 ExStart**：DD 报文需要序列号保证可靠传输，必须确定谁主导序列号，避免冲突。\n- **为什么非 DR/BDR 停留在 2-Way**：减少广播网中的邻接数量，降低 LSDB 同步开销。\n- **状态机与 SPF 解耦**：只有 Full 才触发 SPF，避免不完整数据库导致计算错误。\n\n## 排错思路\n\n- 卡在 Init：检查单向连通性、认证、Hello 间隔/Dead 间隔。\n- 卡在 ExStart：检查 MTU（`display interface`）、ACL 是否放行 OSPF 报文（协议号 89）。\n- 卡在 Exchange/Loading：检查 MTU、LSR/LSU 是否被过滤、链路质量。\n- 频繁 Down：检查 Dead Timer、链路闪断、CPU 过载。",
+  "one": "OSPF 两台路由器从互不相识到完全同步 LSDB 的八个阶段",
+  "analogy": "就像两个人交朋友：先互相看不见（Down），一个人先打招呼（Init），对方也回招呼才算互相认识（2-Way）；接着两人商量谁先说、一次说多少（ExStart），然后互相把各自的笔记目录念一遍（Exchange），发现对方有自己没有的内容就借过来抄（Loading），直到两人笔记完全一样（Full）。之所以要分这么细，是因为抄笔记之前必须先谈好规矩，不然两个人同时开口就乱套了。",
+  "body": "## 为什么需要状态机\n\nOSPF 是链路状态协议，两台路由器要能正确计算路由，前提是双方的 LSDB（Link State Database）完全一致。从「刚收到 Hello」到「LSDB 同步完成」这一过程里，要做的事情差别很大：既要协商主从关系（避免同时发 DD 报文打架），又要交换 LSA 摘要，还要按需请求缺失的完整 LSA。如果只用「通/不通」两个状态描述，排错和实现都没法细化。于是 OSPF 定义了 8 个邻居状态，每个状态对应一组明确的动作和报文交互，任何一步卡住都能精确定位。\n\n这 8 个状态是单向推进的，但可以回退——例如 Full 之后 Hello 超时会掉回 Down，2-Way 之后如果收到对方发来的新 DD 序列也会重新进入 ExStart（主从重协商）。理解「能回退」这一点对排错很关键。\n\n## 八个状态逐层拆解\n\n### 1. Down\n\n初始状态。本机没有收到对方任何 Hello，或者邻居失效定时器（Router Dead Interval，默认 40s，即 4 倍 Hello Interval）超时后回落到这里。\n\n注意：Down 不等于「链路 down」。接口 up 但双方 Hello 参数不匹配（Area ID、Hello/Dead 定时器、认证、Stub 标志、MTU 之外的一些字段），邻居会一直停在 Down 或者 Attempt（NBMA 网络类型下）。\n\n在 NBMA/NBMA-P2MP 环境下，手工配置 neighbor 后会出现一个额外的 **Attempt** 状态，表示正在向该邻居单播发 Hello 但还没收到回应。严格说 OSPF 有 9 个状态（多一个 Attempt），华为文档与 RFC 2328 都以 8 个为主，考试时若问「NBMA 特有的状态」答 Attempt。\n\n### 2. Init\n\n本机从对方收到了 Hello 报文，但**对方发来的 Hello 的邻居列表（Neighbor List 字段）里没有本机的 Router ID**。\n\n这说明对方还没有收到我的 Hello——我只听到了他说话，他没听到我说话。典型原因是单向链路、单向 ACL、或者一端还没起来。排错时看到 Init 停滞，第一反应就是查「对端能不能收到我的 Hello」。\n\n### 3. 2-Way\n\n本机收到的 Hello 里，Neighbor List 中出现了自己的 Router ID，说明**双向通信已确认**。\n\n2-Way 是 OSPF 的第一个「稳定态」。在广播网络（Broadcast）和 NBMA 网络上，DR/BDR 选举就在这个状态之后进行：\n\n- 如果本机是 DR-Other，且对端也是 DR-Other，则双方停留在 2-Way，不再继续推进——因为同一网段内 DROther 之间不需要同步 LSDB，这是 OSPF 的优化设计，减少广播网内的邻接数量（从 n(n-1)/2 降到 n-1 数量级）。\n- 如果双方之一是 DR 或 BDR，则继续向 ExStart 推进。\n\n所以「邻居状态是 2-Way」在广播网里通常是**正常现象**，不是故障。但在 P2P/P2MP 网络上，2-Way 卡住就是故障。\n\n另一个设计点：DR 选举等待时间等于 Router Dead Interval，之后才认为选举结束，这是为了给所有路由器足够时间参与选举，避免 DR 反复震荡。\n\n### 4. ExStart\n\n进入主从协商（Master/Slave Negotiation）。双方发送**空的 DD 报文**（Database Description，也叫 DBD），其中携带三个关键字段：\n\n- **I 位（Init）**：置位表示这是协商阶段的第一个 DD。\n- **MS 位（More/Master）**：置位表示「我宣称自己是 Master」。\n- **DD Sequence Number**：初始值由各自随机生成，谁的 Router ID 大谁当 Master，Master 决定后续序列号。\n\n为什么非要分主从？因为 DD 报文是「逐个摘要确认」式的交互，如果两边同时发、同时等，就会出现序列号冲突和丢包重传的混乱。定一个 Master 负责递增序列号，Slave 只做回应，流程变成严格的一问一答，实现简单且可靠。\n\n**注意**：ExStart 卡住最常见的原因是 **MTU 不匹配**。在华为设备上，以太网接口的 MTU 默认 1500，如果一端手工改成 1400，DD 报文（携带 LSA Headers 且不分片时）在较大一方被拒收，双方就会一直卡在 ExStart。可以用 `ospf mtu-ignore` 强制忽略，但正确做法是统一 MTU。\n\n### 5. Exchange\n\n主从确定后，双方开始互相发送**携带 LSA Header 摘要的 DD 报文**。\n\n每个 DD 报文里装一批 LSA 的头部（20 字节：LS Type、Link State ID、Advertising Router、LS Sequence Number、LS Age、LS Checksum），不是完整 LSA。这样做的好处是：摘要足够判断「你有没有、我有没有、谁更新」，而不用把整个 LSDB 传一遍。这是 OSPF 优于早期链路状态协议的一个关键设计——用摘要交换把同步成本从 O(全量) 降到 O(差异量)。\n\n期间双方各自维护一个 DD 序列号，Master 递增，Slave 回显，Slave 也可以发送 MS=0 的 DD 回应对端。任何一方收到脱序的 DD 会丢弃。\n\n**Exchange 卡住**通常对应 MTU 问题（同上）或单向链路。\n\n### 6. Loading\n\nDD 交换完成后，本机发现自己缺某些 LSA 的完整内容，于是发送 **LSR（Link State Request）** 请求，对端用 **LSU（Link State Update）** 回应，本机再以 **LSAck** 确认。\n\nLoading 状态只在「确实存在差异」时才出现。如果双方 LSDB 完全一致（比如重启一台路由器前另一台已经同步过），可能 Exchange 结束后直接跳到 Full，看不到 Loading。\n\nLoading 阶段关注点：\n\n- LSR/LSU 是**单播**发送的，不依赖组播。\n- 每个 LSR 里可以携带多个请求项，用 LS Type + Link State ID + Advertising Router 三元组唯一定位一个 LSA。\n- 如果 LSR 发出后长时间没收到 LSU，会重传（默认每 5s 重传，Router Dead Interval 内还没收到则邻居关系断裂）。\n- **Max-Age 的 LSA 不会被请求**，因为对方那边也已经老化。\n\nLoading 卡住说明「摘要说有，实际请求不到」，通常是链路丢包、LSA 老化、或者 LSDB 溢出。\n\n### 7. Full\n\n双方 LSDB 完全同步，形成**完全邻接（Full Adjacency）**。此时：\n\n- 本机把该邻居的状态加入 SPF 计算，作为 Router-LSA 中的一条 P2P 或 Transit 链路。\n- 只有 Full 邻居才会被通告进 Router-LSA，这就是为什么 2-Way 的 DROther 不会出现在 LSA 里。\n\nFull 是 OSPF 的目标状态。在一台路由器上执行 `display ospf peer` 看到一片 Full，就说明 LSDB 同步层面没问题了——但**不代表路由一定通**，还要看 SPF 计算结果、区域划分、路由过滤等。\n\n### 8. 状态回退与老化\n\n- Hello 超时（Dead Interval，默认 40s）→ 直接回 Down，并触发 SPF 重算。\n- 接口 down、进程重启 → 回 Down。\n- 收到对方的 DD 报文但序列号异常 → 可回到 ExStart 重新协商。\n- 邻居进入 Full 之后如果收到对方发送的 LSA Age = Max-Age 的 Router-LSA，会触发重新计算但邻居状态可能仍保持 Full（视实现）。\n\n## 与相邻技术的分工\n\n- **Hello 报文**负责维持状态机的「心跳」和参数协商（Area ID、Hello/Dead、认证、Stub、NSSA、Router Priority），参数不匹配直接停在 Down，不会进入后续状态。\n- **DD 报文**负责 ExStart/Exchange 两个状态。\n- **LSR/LSU/LSAck** 负责 Loading 和后续的 LSDB 泛洪（Flooding）。\n- **SPF 计算**只依赖 Full 邻居，所以状态机是「路由计算的前置门槛」。\n\n## 设计上的取舍\n\n1. **为什么要 8 个状态而不是 3 个**：状态细分换来的是可观测性。运维时看一眼状态就知道卡在哪个环节，比抓包分析高效得多。\n2. **为什么要有 2-Way 这个「中间稳定态」**：广播网里 DROther 之间的 Full 邻接没有价值，只增加 LSA 泛洪量，因此 OSPF 用 2-Way 把它们挡在门外。这是用「减少邻接数」换「DR 单点负担」的经典取舍。\n3. **为什么主从协商要放在 Exchange 之前**：DD 报文的可靠性依赖序列号，序列号必须由单一 Master 控制，否则无法做「收到重传」。这是把可靠性机制建立在确定性角色上的典型做法。\n4. **为什么摘要阶段不直接传完整 LSA**：LSDB 可能有几千条 LSA，全量传输代价太高。用 20 字节的 Header 做摘要，只对差异部分做 LSR/LSU，是 OSPF 可扩展性的核心设计之一。\n\n## 常用验证命令\n\n- `display ospf peer` / `display ospf peer verbose`：查看邻居状态、DR/BDR 角色、Dead Timer、DD 序列号。\n- `display ospf interface`：查看接口的 OSPF 参数（Hello/Dead、网络类型、DR 优先级）。\n- `display ospf lsdb`：查看 LSDB，确认 Full 之后数据是否一致。\n- `display ospf error`：查看 OSPF 错误统计，MTU 不匹配、认证失败等会在这里计数。\n- `debugging ospf packet dd` / `debugging ospf event`：抓状态机流转（生产环境慎用）。\n\n## 排错速查\n\n| 状态 | 典型原因 |\n|------|----------|\n| Down | 接口未使能 OSPF、Hello 参数不匹配、认证失败、网络类型错误 |\n| Init | 单向链路、单向 ACL、一端未启动 |\n| 2-Way（P2P 上） | 单向通信、组播被过滤 |\n| 2-Way（广播网上 DROther 之间） | 正常现象 |\n| ExStart | MTU 不一致（最常见）、Router ID 冲突 |\n| Exchange | MTU 不一致、DD 序列号异常、链路 MTU 分片 |\n| Loading | LSR 无响应、LSA 老化、丢包 |\n",
   "cmds": [
     "display ospf peer",
     "display ospf peer verbose",
     "display ospf interface",
-    "display ospf error"
+    "display ospf error",
+    "display ospf lsdb"
   ],
   "pits": [
-    "MTU 不一致可能导致卡在 ExStart/Exchange",
-    "认证不一致会卡在 Init",
-    "广播网非 DR/BDR 之间停留在 2-Way 是正常的",
-    "Hello 间隔或 Dead 间隔不匹配会导致邻居无法建立",
-    "ACL 过滤 OSPF 报文（协议号 89）会导致状态异常"
+    "广播网 DROther 之间停在 2-Way 是正常，别当故障查",
+    "ExStart 卡死九成是两端 MTU 不一致，先看 display ospf error",
+    "Init 说明单向通信，重点查 ACL 和链路收发方向",
+    "P2P 网络上出现 2-Way 一定要查，不是正常现象",
+    "参数不匹配会直接停在 Down，不会进后续状态"
   ],
   "qa": [
     {
       "q": "OSPF 邻居状态机有哪八个状态？",
-      "a": "Down、Init、2-Way、ExStart、Exchange、Loading、Full，以及 NBMA 网络中的 Attempt。"
+      "a": "Down、Init、2-Way、ExStart、Exchange、Loading、Full，共七个常用加 NBMA 的 Attempt 构成八状态。教材常以 Down/Init/2-Way/ExStart/Exchange/Loading/Full 七个加 Attempt 计为八个。"
     },
     {
-      "q": "什么情况下邻居会停留在 2-Way 状态？",
-      "a": "在广播网络中，非 DR/BDR 路由器之间不建立 Full 邻接，停留在 2-Way 是正常现象。"
+      "q": "为什么广播网上 DROther 之间只停在 2-Way？",
+      "a": "DROther 之间同步 LSDB 没有意义，DR/BDR 会把 LSA 泛洪给所有路由器。停留在 2-Way 可减少邻接数量，降低 LSA 泛洪与 SPF 计算开销。"
     },
     {
-      "q": "OSPF 邻居卡在 ExStart 可能是什么原因？",
-      "a": "常见原因有 MTU 不一致、ACL 过滤 DD 报文、Router ID 冲突或单向通信。"
+      "q": "ExStart 卡住最常见的原因？",
+      "a": "MTU 不一致。DD 报文携带 LSA Header 且不分片时，MTU 小的一端无法接收，导致主从协商不成功而卡在 ExStart。可用 ospf mtu-ignore 规避，正解是统一 MTU。"
+    },
+    {
+      "q": "主从协商为什么要分 Master/Slave？",
+      "a": "DD 报文依靠序列号保证可靠传输，需要唯一一方控制序列号递增。Router ID 大者为 Master，避免双方同时发 DD 造成序列号冲突和重传混乱。"
     }
   ],
-  "syllabus": "HCIP-Datacom 路由技术 OSPF 邻居状态机"
+  "syllabus": "HCIP-Datacom OSPF 邻居状态机与邻接关系建立"
 }

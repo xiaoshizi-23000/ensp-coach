@@ -1,0 +1,50 @@
+{
+  "id": "bfd",
+  "title": "BFD 链路快速检测",
+  "level": "HCIP",
+  "cat": "高可用",
+  "keys": [
+    "BFD",
+    "Bidirectional Forwarding Detection",
+    "双向转发检测",
+    "快速检测",
+    "链路检测",
+    "Echo 报文"
+  ],
+  "one": "一种毫秒级的双向链路故障检测协议，独立于上层路由协议。",
+  "analogy": "你家里装了个烟雾报警器，它不管你是炒菜糊了锅还是真着火，只要检测到烟雾就响。BFD 也一样，它自己不关心上面跑的是 OSPF 还是 BGP、是静态路由还是 VRRP，只负责回答一个问题：这条路上我发出去的包，对端还收得到、回得来吗？收不到就在几十毫秒内喊一声，让上层协议赶紧切走。",
+  "body": "## 为什么需要 BFD\n\n路由协议自带的检测机制都太慢。OSPF 的 Hello 定时器默认 10s，Dead 定时器 40s；BGP 的 Keepalive 默认 60s，Hold 默认 180s；VRRP 的 Advertisement_Interval 默认 1s，Master_Down_Interval 约 3s。这些值是为了能在低带宽链路和大型邻居关系上稳定运行而做了保守取值，代价就是故障收敛慢。\n\n更麻烦的是，这些协议往往要**跨设备、跨介质**检测。如果两台路由器中间隔了一台传输设备（SDH、光端机、交换机、微波），中间设备出问题但两端接口 still up，上层协议根本不知道。物理层只能发现「自己这一段的信号丢了」，管不了端到端的通路。\n\nBFD 就是为了填这个洞：把「探测通路是否双向可达」这件事从路由协议里剥离出来，做成一个统一、轻量、可被多种上层协议共享的快速检测引擎。它不承载任何业务数据，只发很短的探测报文；一旦判定故障，就在毫秒级通知所有订阅了它的事件。\n\n## 核心设计取舍\n\n**1. 检测与协议解耦。** BFD 不自己做路由计算，也不决定谁来接管。它只提供「up/down」这个事件，由客户端（OSPF、IS-IS、BGP、静态路由、VRRP、MPLS LSP、PIM 等）自己决定后续动作。这让一套检测机制能同时服务多种协议，也让 BFD 的代码保持很小。\n\n**2. 运行在 UDP（单跳 3784、多跳 4784）之上，但语义是二层的。** 控制报文封装在 UDP 里，目的端口 3784（单跳）/ 4784（多跳），源端口是 3784~3787 的随机值；Echo 报文走 UDP 3785。用 UDP 而不是定义新协议号，是为了能穿过已有的实现和部分中间设备；但它本身不做分片、不做重传，每个报文都有完整性校验和序号。\n\n**3. 状态机极简。** 只有四个状态：`AdminDown`、`Down`、`Init`、`Up`。比 OSPF 那种七八个状态简单得多。\n\n**4. 三层检测方式，各有代价。**\n\n| 方式 | 机制 | 适用 |\n|---|---|---|\n| 异步模式 | 双方周期性互发控制报文，超过检测时间没收到就 down | 默认，通用 |\n| 查询模式 | 两端约定检测时间，省略周期性报文，只在需要时查 | 适合少量会话 |\n| 回声模式 | 本端发 Echo，对端转发环回，本端按自己的节奏算超时 | 降低对端 CPU 负担，适合低性能对端 |\n\n华为设备上默认是**异步模式**。Echo 模式需要与本端配置同时启用，且部分多跳场景不支持。\n\n## 报文格式与关键字段\n\nBFD 控制报文长 24 字节（v1、启用认证后是可变长度）。关键字段：\n\n- **Version**：当前为 1，多跳和某些厂商有 0 的兼容写法。\n- **Diag**：诊断码，说明为什么最后一次 down 了（0=无诊断、1=超时、3=Echo 失败、6=邻居信令 down 等）。排错时看这个值定位得很快。\n- **H（一类）/F（最终）/C（确认）/A（认证）/D（Demand，查询模式）/M（多跳）** 六个标志位。\n- **Detect Mult**：检测倍数，最常配 3。\n- **My Discriminator**：本端的本地标识符，由本端随机生成，用来在多跳场景里唯一识别该会话。\n- **Your Discriminator**：从对端收到的标识符，回填在发出去的报文里。用于在不看 IP 头的情况下快速定位会话。\n- **Desired Min TX Interval**：本端希望的最小发送间隔。\n- **Required Min RX Interval**：本端能支持的最小接收间隔。\n- **Required Min Echo RX Interval**：本端能支持的最小 Echo 接收间隔，是 Echo 能力的协商字段。\n\n## 发送/接收间隔与检测时间怎么算\n\n这是 BFD 最常被问到的部分。规则：\n\n- **本端实际发送间隔** = max(本端 Desired Min TX, 对端 Required Min RX)，并且本端发送时不会高于自己声明的 TX 间隔的附近值（实际实现有 25% 抖动，避免同步）。\n- **本端检测时间** = 对端 Desired Min TX Interval × 本端配置的 Detect Multiplier。注意是「对端发多快」乘以「我看几倍」，不是自己的发送间隔。\n\n所以两端检测时间可以不一样：A 配 100ms×3、B 配 200ms×3，则 A 认为 600ms 超时（看 B 的 200ms 发送间隔），B 认为 300ms 超时（看 A 的 100ms 发送间隔）。\n\n配置用 `bfd min-transmit-interval` / `bfd min-receive-interval` 独立设置，华为实现里还与芯片能力、是否匹配到 DF 卡的硬件 BF D 相关。硬件 BFD 可以让最小间隔做到毫秒级（3.3ms 级），软件 BFD 常见下限是 100ms/3 倍，配得更小会提示「the interval is smaller than the minimum value」。\n\n## 状态机怎么走\n\n1. 本端建会话，发 `Down` 报文（Diag=0）。\n2. 对端收到 `Down`，知道有邻居来了，回复 `Down`（可能为 `AdminDown`）。\n3. 本端收到 `Down`，知道对端看见自己了，转为 `Init`。\n4. 若收到的报文里 Your Discriminator 指向自己（对端已承认本端），则升到 `Up`。\n5. Up 后靠超时维持：在检测时间内收到对端报文就刷新，否则回落到 `Down`，触发客户端协议。\n\n本端单方向发出 `AdminDown` 可以让对端快速感知；对端收到 `AdminDown` 也会转到 `Down` 并通知上层，而不是撑到超时才动作。\n\n## 与相邻技术的分工\n\n**BFD vs 路由协议 Hello：** Hello 是路由协议自己的保活，周期长，还承载邻居信息；BFD 是纯探测，周期短。两者不冲突，上线时通常是 BFD 检测 up 后协议才宣告邻居可用，BFD down 后协议立即断开。\n\n**BFD vs 链路检测（物理层）：** 物理层只能看到本端接口信号，端到端黑洞（中间设备转发不出、单向丢包）看不到，BFD 能检测**双向**可达，不能检测单向可达是它的一大局限（异步模式下单向丢包会被当作双向 down，属于保守失败，比静默好）。\n\n**BFD vs 硬件 BFD（如以太网 OAM、BFD for MPLS LSP）：** 硬件 BFD 由转发平面芯片检测，不依赖 CPU 调度，能做到亚毫秒级且 CPU 不敏感；软件 BFD 走 CPU 定时器，高速率和高会话数时容易抖动。对于运营级链路，会配置 `bfd bind` 到具体业务（如 LSP 或静态路由），并绑定到硬件检测能力。\n\n**BFD vs TWAMP / NQA：** NQA 能测丢包、时延、抖动等性能指标，周期通常 10s 以上，用于 SLA 评估；BFD 只关心通断，周期短，用于故障切换。生产环境通常两者都上：BFD 负责切换，NQA 负责性能质量。\n\n## 与客户端联动：怎么让 OSPF 真正跟着 BFD 走\n\n配了 BFD 并不自动生效。正确流程是：\n\n1. 在接口/全局配置 BFD 参数，建会话。\n2. 在 OSPF 进程里 `bfd all-interfaces enable`，或接口下 `ospf bfd enable`，让 OSPF 成为客户端。\n3. OSPF 邻居建立时，同时建立 BFD 会话并注册订阅。\n4. BFD 检测 down，OSPF 立即断邻居并触发 SPF，不再等 40s。\n\n静态路由使用 `ip route-static ... bfd` 或 `ip route-static ... track bfd-session`。VRRP 用 `vrrp vrid X track bfd-session`。BGP 用 `peer x.x.x.x bfd enable`（默认单跳，多跳需 `bfd multi-hop`）。\n\n## 多跳与认证\n\n单跳 BFD 靠 TTL=255 的 GTSM 机制防伪造，报文校验也严格。**多跳 BFD** 因为路径可能不唯一，改用目的端口 4784 并强制使用鉴别符（My/Your Discriminator）定位会话，且通常需要配置来源/目的地址匹配。多跳 BFD 的检测间隔不建议配到 100ms 以下，因为路径抖动大、容易误切。\n\nBFD 支持认证：Simple Password（明文，几乎没意义）和 MD5/Keyed SHA1（带序列号防重放）。认证会带来额外的 CPU 开销，而且两端必须同时配置且参数一致，否则会话停留在 Down。\n\n## 常见部署形态\n\n- 静态路由 + BFD 联动：常用于双出口、双 ISP 选路。\n- OSPF/IS-IS + BFD：城域核心、园区汇聚，收敛从秒级降到亚秒级。\n- BGP + BFD：用于与 PE/运营商设备对接，BGP 收敛从 180s 降到 1s 内。\n- VRRP + BFD：解决 VRRP 备设备无法感知主设备故障（或主设备转发路径已断但 VRRP 仍 up）的问题。\n- MPLS LSP BFD：检测 LSP 通断，配合 FRR 实现 50ms 级保护倒换。",
+  "cmds": [
+    "display bfd session all",
+    "display bfd session verbose",
+    "display bfd statistics session all",
+    "display ospf bfd session all",
+    "display bfd configuration all"
+  ],
+  "pits": [
+    "两端检测时间独立计算，需核对对端 TX 与本端 Detect Mult 的乘积",
+    "软件 BFD 间隔配得过小会协商失败或报文抖动，检查 DF 卡与最小值限制",
+    "协议侧须显式启用 bfd，只配 BFD 会话不会让 OSPF/BGP 跟着切换",
+    "多跳 BFD 必须匹配来源/目的地址，否则会话一直 Down",
+    "BFD 认证两端必须都配且算法密钥一致，单边配置必然不通"
+  ],
+  "qa": [
+    {
+      "q": "BFD 的检测时间是怎么算的？两端是否一定相等？",
+      "a": "本端检测时间 = 对端 Desired Min TX Interval × 本端 Detect Mult。两端可分别计算，所以可能不等。发送间隔取 max(本端 Desired TX, 对端 Required RX)。"
+    },
+    {
+      "q": "BFD 四个状态是什么？",
+      "a": "AdminDown、Down、Init、Up。收到对端 Down 转 Init，收到报文中 Your Discriminator 指向自己方升 Up，Up 后超时未收到报文回落 Down。"
+    },
+    {
+      "q": "为什么 BGP 配 BFD 后收敛明显变快？",
+      "a": "BGP 自身 Keepalive 60s、Hold 180s，最慢要等 180s 才断邻居。BFD 毫秒级检测 down 后立即通知 BGP 断会话，无需等 Hold 定时器。"
+    },
+    {
+      "q": "BFD 单跳与多跳有什么区别？",
+      "a": "单跳用 UDP 3784、GTSM TTL=255 防伪；多跳用 4784、靠 Discriminator 定位会话并需匹配源/目的地址，检测间隔不宜过小。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 可靠性技术（BFD 快速检测与联动）"
+}

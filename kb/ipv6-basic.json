@@ -6,43 +6,46 @@
   "keys": [
     "IPv6",
     "ND",
-    "邻居发现",
-    "NS",
-    "NA",
-    "RS",
-    "RA",
+    "Neighbor Discovery",
+    "NS/NA",
+    "RS/RA",
     "SLAAC",
-    "DAD"
+    "EUI-64"
   ],
-  "one": "IPv6 地址结构与邻居发现机制，涵盖地址格式、类型及 ND 协议工作原理。",
-  "analogy": "IPv6 地址就像一张超长的身份证号，前几位是地区（网络前缀），后几位是个人编号（接口标识）。邻居发现就像小区里的物业广播：新搬来的住户先喊一嗓子“有人用这个门牌号吗？”（DAD），确认没人应声才正式入住；平时找邻居要个东西，就直接在楼道里喊名字（NS），对方听到就回应（NA），不用再跑一趟派出所（ARP）。路由器则像物业管理员，定期贴通知（RA）告诉大家小区网关和门牌规则。",
-  "body": "## 1. IPv6 地址结构\n\nIPv6 地址长 128 位，通常写成 8 组 4 位十六进制数，用冒号分隔，例如 `2001:db8:acad:1::1/64`。为简化书写，允许两种压缩：\n- 每组前导零可省略，如 `2001:0db8` 写成 `2001:db8`。\n- 连续的全零组可用 `::` 代替，但一个地址中只能出现一次 `::`。\n\n地址由两部分组成：\n- **网络前缀**：高 64 位（通常），标识子网。\n- **接口标识符（Interface ID）**：低 64 位，标识接口。\n\nIPv6 没有广播地址，支持单播、组播和任播。常见地址类型：\n- **全球单播地址（GUA）**：`2000::/3`，公网可路由。\n- **链路本地地址（LLA）**：`fe80::/10`，仅链路内有效，自动生成，用于 ND、路由协议等。\n- **唯一本地地址（ULA）**：`fc00::/7`，类似私有地址。\n- **组播地址**：`ff00::/8`，包括 `ff02::1`（所有节点）、`ff02::2`（所有路由器）、`ff02::1:ff00:0/104`（被请求节点组播）。\n- **环回地址**：`::1/128`。\n- **未指定地址**：`::/128`。\n\n## 2. 邻居发现协议（ND）\n\nND 是 IPv6 的核心协议，基于 ICMPv6 实现，整合了 IPv4 中的 ARP、ICMP 路由器发现和重定向功能。ND 定义了五种 ICMPv6 报文：\n\n| 报文类型 | 类型号 | 作用 |\n|---------|--------|------|\n| 路由器请求（RS） | 133 | 主机请求路由器立即发送 RA |\n| 路由器通告（RA） | 134 | 路由器通告前缀、标志、跳数限制等 |\n| 邻居请求（NS） | 135 | 请求邻居的链路层地址或进行 DAD |\n| 邻居通告（NA） | 136 | 响应 NS，通告自己的链路层地址 |\n| 重定向（Redirect） | 137 | 路由器通知主机更优下一跳 |\n\n### 2.1 地址解析\n\nIPv4 用 ARP 广播请求目标 IP 的 MAC 地址；IPv6 用 NS/NA 通过组播实现：\n1. 主机 A 要发送数据给主机 B（已知 B 的 IPv6 地址），先查邻居缓存。\n2. 若未命中，A 发送 NS 报文，目的地址为 B 的被请求节点组播地址（`ff02::1:ffXX:XXXX`，由 B 的 IPv6 地址后 24 位生成）。\n3. B 收到 NS 后，回复 NA 报文（单播），携带自己的链路层地址。\n4. A 收到 NA，更新邻居缓存，后续通信直接封装。\n\n使用组播而非广播，避免干扰无关节点。\n\n### 2.2 地址自动配置（SLAAC）\n\n主机可通过无状态地址自动配置（SLAAC）生成地址：\n1. 主机生成链路本地地址（EUI-64 或随机），发送 NS 进行 DAD。\n2. 主机发送 RS（目的 `ff02::2`）请求路由器信息。\n3. 路由器回复 RA，包含网络前缀、前缀长度、默认网关、标志位（A 位表示允许 SLAAC，O 位表示使用 DHCPv6 获取其他配置）。\n4. 主机用前缀 + 接口标识生成全球单播地址，再次 DAD 后启用。\n\nRA 报文关键字段：\n- **Cur Hop Limit**：默认跳数限制。\n- **M 标志**：1 表示使用 DHCPv6 获取地址。\n- **O 标志**：1 表示使用 DHCPv6 获取其他配置（如 DNS）。\n- **A 标志**：1 表示允许 SLAAC。\n- **Router Lifetime**：路由器作为默认网关的有效期。\n- **前缀信息选项**：包含前缀、长度、有效/首选 lifetime、L /A 标志。\n\n### 2.3 重复地址检测（DAD）\n\n在地址启用前，节点发送 NS（源地址为 `::`，目的为被请求节点组播）进行 DAD。若收到 NA 响应，说明地址已被占用，该地址标记为“重复”，不可用。DAD 确保地址唯一性，是 IPv6 地址配置的必要步骤。\n\n### 2.4 重定向\n\n当路由器发现主机使用的下一跳不是最优时，发送 Redirect 报文，包含目标地址和更优下一跳，主机据此更新路由缓存。\n\n## 3. 与 IPv4 的对比\n\n| 功能 | IPv4 | IPv6 |\n|------|------|------|\n| 地址解析 | ARP（广播） | NS/NA（组播） |\n| 地址配置 | DHCP/手动 | SLAAC/DHCPv6/手动 |\n| 路由器发现 | ICMP 路由器发现 | RS/RA |\n| 重复检测 | 免费 ARP | DAD |\n\nND 的设计将多种功能统一到 ICMPv6，减少了协议数量，并利用组播提高效率。\n\n## 4. 安全考虑\n\nND 缺乏认证机制，易受欺骗攻击（如伪造 RA、NA）。可部署 SEND（安全邻居发现）或 RA Guard 等机制缓解。",
+  "one": "IPv6 用 128 位分层地址，用 ICMPv6 的 ND 替代 ARP 完成邻居解析。",
+  "analogy": "IPv4 像是每搬一次家都要重新去派出所登记住址，还得挨家挨户敲门问“谁是 192.168.1.1”；IPv6 则像小区装了广播系统：新住户进门先按一下总台（RS），物业自动给你分配门牌号（RA），要找谁直接喊一嗓子“302 在不在”（NS），对方应一声（NA），顺便把对方长相记进小本本（邻居缓存）。而且门牌号本身带楼栋、单元、房号的信息，快递员看一眼就知道怎么送，不用再翻整本通讯录。",
+  "body": "## 为什么需要重做一套地址和解析机制\n\nIPv4 的两块硬伤在 IPv6 里必须一起解决：一是地址空间只有 32 位，靠 NAT 和 CIDR 续命；二是地址解析依赖 ARP，而 ARP 是**广播**的，直接在二层泛洪，网络越大广播域越脏，而且 ARP 没有任何认证，谁都能冒充网关。\n\nIPv6 的设计思路是：地址本身要能路由聚合、要能自动配置；解析要走**组播**而不是广播；控制协议统一收到 ICMPv6 里，不再单独搞一个像 ARP 那样的裸二层协议。这就是 ND（Neighbor Discovery，邻居发现）的由来，定义在 RFC 4861。\n\n## 一、128 位地址怎么切\n\n一个 IPv6 地址 128 bit，写成 8 组 4 位十六进制，用冒号分隔，例如 `2001:db8:acad:1::1/64`。它不是一个整体，而是被切成两半看：\n\n| 部分 | 位数 | 含义 |\n|---|---|---|\n| 网络前缀（Prefix） | 通常 64 | 由路由/运营商分配，用来做路由聚合 |\n| 接口标识（Interface ID，IID） | 64 | 标识链路上的一个接口，相当于“主机号” |\n\n之所以把主机位**固定成 64 位**，是为了配合 SLAAC 和 EUI-64 自动生成 IID，也为了配合 64 位边界做快速查表。代价是：**IPv6 没有传统意义上的广播地址概念**，也没有“主机位少于 64 位”这种玩法的常见场景（虽然技术上允许非 /64 前缀，但 SLAAC 要求 /64）。\n\n### 地址简写规则\n\n- 每组前导 0 可省略：`2001:0db8:0000` → `2001:db8:0`\n- 连续的全 0 组可用 `::` 压缩，**一个地址中只能出现一次**（否则无法还原）\n- 掩码不写点分十进制，直接写前缀长度 `/64`\n\n### 地址类型与关键单播地址\n\n- **GUA（Global Unicast Address）**：全球单播，目前分配在 `2000::/3`，公网可路由。\n- **LLA（Link-Local Address）**：`FE80::/10`，**每块使能 IPv6 的接口自动生成**，只在链路内有效，不转发到其他链路。所有 ND 报文、路由协议邻居的源地址默认都用 LLA。注意 LLA 必须手工指定 scope 或出接口，因为每块接口都有，路由器会问你要发给哪个接口。\n- **ULA**：`FC00::/7`，相当于 IPv4 私网，但**不做 NAT**，只是不可全球路由。\n- **组播**：`FF00::/8`。ND 强依赖的几个固定组播见下文。\n- 特殊地址：`::1` 回环，`::` 未指定地址（DAD 前使用），`::/96` 兼容地址已废弃。\n\n## 二、组播地址是 ND 的地基\n\nND 不广播，靠三类组播：\n\n| 组播地址 | 用途 |\n|---|---|\n| `FF02::1` | 链路内所有节点（All-Nodes） |\n| `FF02::2` | 链路内所有路由器（All-Routers） |\n| `FF02::1:FFXX:XXXX` | 被请求节点组播（Solicited-Node），后 24 位取自目标地址低 24 位 |\n\n**被请求节点组播**是这里最妙的设计。IPv4 里 ping 一个地址，全广播域都得被打断；IPv6 里解析 `2001:db8::1` 时，NS 发往 `FF02::1:FF00:0001`，只有 IID 低 24 位匹配的那极少数主机（包括目标本身）才会被网卡硬件过滤上来。这靠的是二层组播 MAC 映射：`33:33:FF:XX:XX:XX`，直接把 IPv6 组播地址低 32 位搬进 MAC 后 32 位。**交换机不开启 MLD snooping 时仍会泛洪**，所以二层优化要靠 MLD snooping 配合，这是现场常被忽略的一环。\n\n每块接口在做 DAD 之前，就已经把自己加入对应的 Solicited-Node 组播组。\n\n## 三、ND 的五种报文\n\nND 全部跑在 ICMPv6 之上（IPv6 Next Header = 58），用 ICMPv6 Type 区分，目的地址通常是组播或单播。注意 ICMPv6 在 IPv6 里是**必需的**，不是可选的“工具协议”，防火墙不能一棍子打死。\n\n| 报文 | ICMPv6 Type | 源 → 目的 | 作用 |\n|---|---|---|---|\n| RS（Router Solicitation） | 133 | 主机 LLA → `FF02::2` | 主机启动后催路由器赶紧发 RA |\n| RA（Router Advertisement） | 134 | 路由器 LLA → `FF02::1` | 通告前缀、默认网关、M/O 标志、跳数等 |\n| NS（Neighbor Solicitation） | 135 | 源地址或 `::` → 目标 Solicited-Node 组播 | 地址解析 / DAD / 邻居不可达检测 |\n| NA（Neighbor Advertisement） | 136 | 目标地址 → NS 的源 | 应答解析，携带自身链路层地址 |\n| Redirect | 137 | 路由器 → 主机单播 | 告诉主机有更好的下一跳 |\n\nNS 和 NA 都携带 **Target Address** 字段和 **Source/Target Link-Layer Address Option（SLLA/TLLA）**，这就是替代 ARP 中“MAC 地址”的载体。\n\n### 具体看一个 NS/NA 交互\n\n主机 A（`2001:db8::A`）要发数据给同链路的 B（`2001:db8::B`）：\n\n1. 查邻居缓存（等价于 ARP 表）没有 B 的条目。\n2. A 发送 NS：IPv6 源 = A 的 LLA，目的 = `FF02::1:FF00:000B`；ICMPv6 Type=135，Target Address=`2001:db8::B`，Options 里带 SLLA = A 的 MAC。\n3. B 收到后回 NA：源 = `2001:db8::B`，目的 = A 的 LLA；Type=136，Target Address=`2001:db8::B`，Options 带 TLLA = B 的 MAC，`Solicited` 标志位置 1，`Override` 标志位置 1。\n4. A 写入邻居缓存，状态置为 `REACHABLE`，开始转发数据。\n\nNA 的 `Solicited=1` 表示“这是对 NS 的应答”，`Override=1` 表示可以覆盖已有条目；如果 `Solicited=0`（例如路由器主动通告链路层地址变化），接收方会走一次可达性确认流程，不能直接信。\n\n## 四、DAD：地址配置前必须先“喊一声”\n\nIPv6 没有 ARP 那种“配了就用”的宽松做法。任何单播地址（除 `::`、`::1` 及 anycast）在用之前，都必须做 **DAD（Duplicate Address Detection）**：\n\n1. 接口暂时把该地址标记为 `tentative`，源地址用 `::`。\n2. 发送 NS，Target Address = 待检测地址，目的 = 该地址的 Solicited-Node 组播，**不带 SLLA**（因为此时还没有可用源地址）。\n3. 若在 `DupAddrDetectTransmits`（VRP 默认 1 次）后收到针对该地址的 NA，则判定冲突，地址标记 `duplicate` 并**禁用**，日志告警，需要人工处理。\n4. 无应答则地址转为 `preferred`，可用。\n\n代价很直接：DAD 引入一次往返时延，主机接入网络到真正能通信会慢一点；VRP 里可以用 `ipv6 nd dad attempts 0` 关掉，但只在确定无冲突的受控环境（如服务器静态地址）里才敢关，否则地址冲突会静默发生。\n\n## 五、地址怎么自动配出来：SLAAC 的两条路\n\n### 路径 1：EUI-64\n\n把接口 MAC（48 位）中间戳 `FFFE`，再把第 7 位（U/L 位，Universal/Local）取反，凑成 64 位 IID。\n\n例如 MAC `00:1A:2B:3C:4D:5E`：\n\n- 中间插 `FFFE` → `00:1A:2B:FF:FE:3C:4D:5E`\n- 第一字节 `00` 的第 7 位取反 → `02`\n- IID = `021A:2BFF:FE3C:4D5E`\n\n问题很明显：IID 直接暴露 MAC，可被追踪；而且换网卡就换地址。所以现在**不推荐**，VRP 中默认不用 EUI-64 生成 GUA 的 IID，而是用 **stable-privacy** 或随机 IID（具体默认行为依版本，配置上要显式确认 `ipv6 address auto link-local` 与 RA 的关系）。\n\n### 路径 2：RA 驱动的 SLAAC\n\n主机启动流程：\n\n1. 生成 LLA（依据 MAC 或随机），做 DAD。\n2. 发 RS 到 `FF02::2`（源 = LLA）。\n3. 路由器回 RA 到 `FF02::1`，里面带 **Prefix Information Option（PIO）**：前缀、前缀长度、`A`（Autonomous）标志、`L`（On-Link）标志、Valid Lifetime、Preferred Lifetime。\n4. 主机把前缀（通常 /64）与自己生成的 IID 拼成 GUA，做 DAD，然后启用。\n5. 同时用 RA 源地址（路由器的 LLA）作为默认网关。\n\n要点标志位：\n\n- `A=1`：允许该前缀用于 SLAAC；`A=0` 则主机不能自配。\n- `L=1`：该前缀在链路上（On-Link），目的地址在此前缀时直接 NS 解析，不发给网关。\n- RA 中的 **M 标志**（Managed）：=1 表示地址通过 DHCPv6 获取；**O 标志**（Other）：=1 表示其他参数（如 DNS，通过 RDNSS Option 下发）走 DHCPv6。M=1 的经典组合是“地址 DHCPv6，其余看 RA”。\n- RA 里的 `Router Lifetime` 决定该路由器能否作为默认网关，为 0 表示只当信息路由器、不当网关。`Cur Hop Limit`、`Reachable Time`、`Retrans Timer` 会覆盖主机默认的邻居缓存参数。\n\nRA 默认周期发送（VRP 里 `ipv6 nd ra interval`，默认大致 200~600 秒随机），并响应 RS 立即单播/组播一发。主机侧允许接收 RA 的前提是 `ipv6 nd ra-disable` 没被打开（某些安全规范会关掉 RA 接收）。\n\n## 六、邻居缓存状态机与 NUD\n\n邻居缓存不是“学到就一直留着”，它有状态：\n\n- `INCOMPLETE`：NS 已发，等 NA。\n- `REACHABLE`：收到确认（如 Solicited NA），在 `ReachableTime` 内可直接用。\n- `STALE`：超时了，但还能用，下次发包时顺便触发确认。\n- `DELAY`：进入 STALE 后发包，先等 `DelayFirstProbeTime`（默认 5 秒）看上层有没有确认。\n- `PROBE`：重传 NS（单播，最多 `MAX_UNICAST_SOLICIT` 次），无应答则删除条目。\n\n这套机制叫 **NUD（Neighbor Unreachability Detection，邻居不可达检测）**，IPv4 的 ARP 表没有对等物——IPv4 只能靠上层（TCP）发现对端挂了，而 NUD 在 IP 层就做了轻量探测。取舍是：增加了控制报文，但故障切换更快。\n\n`ReachableTime` 通常由 RA 里的 Reachable Time 字段决定（或由主机随机取值，防止同步风暴）。\n\n## 七、和相邻技术怎么分工\n\n- **ND vs ARP**：ND 用 ICMPv6 承载、用组播寻址、内建 DAD 与 NUD、可被 SEND（RFC 3971）做密码学保护；ARP 是裸以太网类型 `0x0806`、广播、无认证。\n- **ND vs DHCPv6**：ND(RA) 负责“前缀和网关”的自动发现与无状态自配（SLAAC）；DHCPv6 负责需要集中管理、审计、下发更多参数（DNS、域名、NTP）的场景。两者可共存：地址 SLAAC、DNS 用 DHCPv6（O=1）。\n- **ND vs 路由协议**：RA 只解决主机默认网关，不解决路由器之间的路由；路由器之间靠 OSPFv3/IS-IS/BGP4+ 建立邻居，它们的邻居地址默认用 LLA。\n- **MLD**：ND 用组播，组播在二层要靠 MLD/MLD snooping 收敛，否则交换机仍然泛洪——设备上线前记得规划。\n\n## 八、设计取舍小结\n\n1. **64 位 IID 固定**：换来 SLAAC 的简洁和查表效率，代价是地址空间利用率下降，且给隐私带来挑战（催生 stable-privacy）。\n2. **组播替代广播**：把解析报文的影响面收敛到一个 Solicited-Node 组，但把复杂度转嫁给二层组播管理和 MLD snooping。\n3. **把 ARP/DAD/重定向/路由发现塞进 ICMPv6**：协议栈统一、易于扩展 Option，但 ICMPv6 变成关键路径，ACL 一旦错杀 Type 133~137，整片网络“能配地址但通不了”。\n4. **DAD 强制**：避免静默冲突，代价是接入时延；生产环境要评估是否值得关。\n5. **RA 无认证**：原设计中 RA 可被伪造（恶意 RA 改网关），所以企业网普遍部署 **RA Guard** / ND snooping 等一层防护。",
   "cmds": [
-    "display ipv6 interface GigabitEthernet0/0/0",
+    "display ipv6 interface GigabitEthernet0/0/1",
     "display ipv6 neighbors",
-    "display ipv6 routing-table",
-    "display icmpv6 statistics"
+    "display ipv6 interface GigabitEthernet0/0/1 verbose",
+    "display icmpv6 statistics",
+    "display ipv6 routing-table"
   ],
   "pits": [
-    "DAD 未完成前地址处于 tentative 状态，不能转发数据。",
-    "RA 的 M 和 O 标志配置错误会导致主机无法获取地址或 DNS。",
-    "链路本地地址必须配置，否则 ND 无法工作。",
-    "NS 组播地址计算错误会导致解析失败。",
-    "防火墙可能过滤 ICMPv6，导致 ND 失效。"
+    "ICMPv6 Type 133~137 被 ACL 拦截，导致地址能配上但不通",
+    "非 /64 前缀下发 RA 时 SLAAC 不生效，主机无法生成 GUA",
+    "忘了开 ipv6 nd ra halt 关闭，导致连接主机的接口误发 RA",
+    "组播未配 MLD snooping，NS 在二层仍然泛洪",
+    "DAD 检测到冲突后地址被禁用，日志容易被忽略，需查 duplicate 状态"
   ],
   "qa": [
     {
-      "q": "IPv6 邻居发现协议包含哪些报文？",
-      "a": "五种：RS（133）、RA（134）、NS（135）、NA（136）、Redirect（137）。"
+      "q": "NS 报文和 ARP Request 的本质区别是什么？",
+      "a": "NS 走 ICMPv6 Type 135、目的为被请求节点组播，只有 IID 低 24 位匹配者上送 CPU；ARP 是以太网广播，全广播域中断。NS 还用于 DAD 与 NUD，并携带 Option 扩展。"
     },
     {
-      "q": "DAD 的作用是什么？如何工作？",
-      "a": "检测地址是否重复。节点发送 NS（源地址 ::，目的为被请求节点组播），若收到 NA 则地址冲突。"
+      "q": "RA 中 M 和 O 标志分别什么意思？",
+      "a": "M=1 表示地址通过 DHCPv6 获取（Stateful）；O=1 表示其他配置参数（如 DNS）通过 DHCPv6 获取。两者可组合，常见 M=0/O=1 即 SLAAC 配址 + DHCPv6 发 DNS。"
     },
     {
-      "q": "SLAAC 如何生成全球单播地址？",
-      "a": "主机通过 RA 获取前缀，结合接口标识（EUI-64 或随机）生成地址，经 DAD 后启用。"
+      "q": "为什么 IPv6 邻居缓存要引入 NUD？",
+      "a": "IPv4 ARP 表老化后直接删或继续用，无法判断对端是否还活着。NUD 通过 REACHABLE/STALE/DELAY/PROBE 状态与单播 NS 探测，在 IP 层提前发现不可达，加快故障收敛。"
+    },
+    {
+      "q": "EUI-64 生成 IID 的步骤？",
+      "a": "MAC 中间插入 FFFE 凑 64 位，再将第一字节的第 7 位（U/L 位）取反。缺点是暴露 MAC、不利隐私，现多用 stable-privacy 随机 IID。"
     }
   ],
-  "syllabus": "HCIA-Datacom IPv6 基础"
+  "syllabus": "HCIA-Datacom IPv6 基础（IPv6 地址格式、NDP 与地址自动配置）"
 }

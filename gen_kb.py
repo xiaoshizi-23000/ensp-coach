@@ -86,7 +86,7 @@ TOPICS = [
 ]
 
 
-def gen_one(tid, title, level, cat):
+def gen_one(tid, title, level, cat, thinking=True):
     prompt = f"""写一个华为认证知识库条目。
 
 【知识点】{title}
@@ -106,7 +106,7 @@ def gen_one(tid, title, level, cat):
 
 只输出 JSON。"""
     r = ai.chat([{"role": "user", "content": prompt}], system=SYSTEM, json_mode=True,
-                temperature=0.3, timeout=240, max_tokens=16384, thinking=False)
+                temperature=0.3, timeout=240, max_tokens=16384, thinking=thinking)
     if not (r.get("content") or "").strip():
         r = ai.chat([{"role": "user", "content": prompt + "\n\n上次输出为空。请直接输出 JSON 本体。"}],
                     system=SYSTEM, json_mode=False, temperature=0.3, timeout=240,
@@ -143,11 +143,11 @@ def run_one(tid, title, level, cat):
         return f"{tid}: 已存在"
     t = time.time()
     d, err = None, ""
-    for _ in range(3):
+    for i in range(4):
         d, err = gen_one(tid, title, level, cat)
         if d:
             break
-        time.sleep(1)
+        time.sleep(15 + i * 10)
     if not d:
         return f"{tid}: 失败 {err[:80]}"
     with open(p, "w", encoding="utf-8") as f:
@@ -161,7 +161,7 @@ def main():
     from concurrent.futures import ThreadPoolExecutor, as_completed
     tasks = [(tid, title, level, cat) for tid, title, level, cat in TOPICS
              if not only or tid in only]
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(run_one, tid, title, level, cat) for tid, title, level, cat in tasks]
         for fut in as_completed(futs):
             print(fut.result(), flush=True)

@@ -6,42 +6,47 @@
   "keys": [
     "VXLAN",
     "EVPN",
-    "Overlay",
     "BGP EVPN",
+    "Overlay",
     "VTEP",
     "VNI",
-    "MAC-in-UDP"
+    "MP-BGP",
+    "RFC 8365"
   ],
-  "one": "用 MAC-in-UDP 封装在 L3 网络上构建虚拟 L2 网络，并用 BGP EVPN 作为控制平面分发转发表项。",
-  "analogy": "VXLAN 就像把一封信（原始以太网帧）装进一个标准快递信封（UDP/IP 包）里，快递公司（Underlay IP 网络）只认信封上的地址，不关心里面写了什么。EVPN 则像快递公司的电子运单系统，提前把“谁住在哪、怎么走”登记好，不用每到一个新地方就挨家挨户敲门问路（泛洪学习）。",
-  "body": "## 为什么需要 VXLAN\n\n传统 VLAN 有两个硬伤：一是 12 bit 的 VLAN ID 只有 4094 个可用，云数据中心多租户场景下不够分；二是 VLAN 是二层域，跨三层网络延伸二层需要大二层技术（如 STP 收敛慢、广播风暴域大）。VXLAN 用 24 bit 的 VNI（VXLAN Network Identifier）把租户数扩展到约 1600 万，同时把二层帧封装进 UDP/IP，让二层网络可以“跑”在三层 IP 网络之上，Underlay 只负责 IP 可达，Overlay 负责租户隔离与二层延伸。\n\n## VXLAN 数据平面\n\n### 封装格式\n\nVXLAN 报文 = 原始以太网帧 + VXLAN 头 + 外层 UDP/IP 头。\n\n- 外层 IP 头：源/目的地址是 VTEP 的 IP（Underlay 地址），协议号 17（UDP）。\n- 外层 UDP 头：目的端口 4789（IANA 分配），源端口由内层帧哈希生成，用于 ECMP 负载分担。\n- VXLAN 头：8 字节，其中 VNI 占 24 bit，标志位 I 位表示 VNI 有效。\n- 内层：原始以太网帧，包含内层 MAC 头。\n\n### VTEP 与 VNI\n\nVTEP（VXLAN Tunnel End Point）是封装/解封装实体，每个 VTEP 有唯一的 Underlay IP。VNI 标识一个 VXLAN 段（类似 VLAN），不同 VNI 之间二层隔离。一个 VTEP 上可以关联多个 VNI，每个 VNI 对应一个广播域。\n\n### 转发流程\n\n1. 接入侧收到原始帧，根据端口/VLAN 映射到 VNI。\n2. 查该 VNI 的 MAC 表，命中则得到目的 VTEP IP；未命中则泛洪（头端复制）。\n3. 封装外层 UDP/IP，源 IP 为本 VTEP，目的 IP 为目的 VTEP，VNI 填入。\n4. Underlay 路由转发到目的 VTEP。\n5. 目的 VTEP 解封装，根据 VNI 和内层目的 MAC 转发到本地接入端口。\n\n### 泛洪与头端复制\n\nVXLAN 没有“组播”依赖时，采用头端复制（Head-End Replication）：源 VTEP 把广播/未知单播/组播帧复制多份，分别单播给同一 VNI 内的所有远端 VTEP。这要求源 VTEP 知道该 VNI 下有哪些远端 VTEP（即 VTEP 列表），这个列表的维护正是控制平面要解决的问题。\n\n## 为什么需要 EVPN 控制平面\n\n纯数据平面 VXLAN（RFC 7348）靠泛洪学习 MAC，存在三个问题：\n\n- 泛洪量大，尤其多租户大二层；\n- MAC 学习依赖数据触发，首次通信有泛洪延迟；\n- 无法提前感知 VTEP 故障，收敛慢。\n\nEVPN（Ethernet VPN，RFC 7432）用 BGP 作为控制平面，把 MAC/IP 可达性、VTEP 成员关系、广播域信息通过 BGP 路由分发，实现“控制平面学习”，数据平面不再泛洪。\n\n## BGP EVPN 路由类型\n\nEVPN 在 BGP 中定义了几种路由类型（Route Type）：\n\n| 类型 | 名称 | 作用 |\n|------|------|------|\n| Type 1 | Ethernet Auto-Discovery (A-D) | 快速收敛、别名（Aliasing）、水平分割 |\n| Type 2 | MAC/IP Advertisement | 通告 MAC 地址和/或 IP 地址可达性 |\n| Type 3 | Inclusive Multicast Ethernet Tag (IMET) | 通告 VTEP 加入某 VNI，用于头端复制列表 |\n| Type 4 | Ethernet Segment | 多归接入（ESI）场景，DF 选举 |\n| Type 5 | IP Prefix | 通告 IP 前缀路由，用于 L3 网关 |\n\n### Type 2 路由\n\nType 2 是 EVPN 的核心，携带：\n\n- RD（Route Distinguisher）：区分不同 VNI/租户；\n- Ethernet Tag ID：标识广播域；\n- MAC Address Length + MAC Address；\n- IP Address Length + IP Address（可选，用于 ARP 抑制和主机路由）；\n- MPLS Label 或 VXLAN VNI：封装时使用的标识；\n- 下一跳：VTEP IP。\n\n收到 Type 2 后，VTEP 生成 MAC 表项（VNI + MAC → 下一跳 VTEP），若携带 IP 则同时生成 ARP 表项（IP → MAC），实现 ARP 抑制：主机 ARP 请求由网关代答，不泛洪到全网。\n\n### Type 3 路由\n\nType 3 携带 VTEP IP 和 VNI，用于构建头端复制列表。每个 VTEP 加入某 VNI 时发 Type 3，其他 VTEP 收到后把该 VTEP 加入该 VNI 的复制列表。这样广播/未知单播只复制给列表中的 VTEP，不再依赖数据平面泛洪发现。\n\n### Type 5 路由\n\nType 5 用于 L3 网关场景，通告 IP 前缀（类似 IP VPN），实现跨 VNI 的三层转发。分布式网关下，每个 VTEP 都是所在 VNI 的网关，Type 5 让 VTEP 之间知道对方背后的 IP 网段。\n\n## 分布式网关与对称/非对称 IRB\n\nEVPN 分布式网关（Distributed Anycast Gateway）让每个 VTEP 都配置相同的网关 IP 和 MAC（Anycast MAC），主机无论接入哪个 VTEP，网关都在本地，流量无需绕行到集中网关。\n\n跨 VNI 转发有两种模式：\n\n- 非对称 IRB：源 VTEP 做一次路由（内层 MAC 改为目的 VNI 网关 MAC），封装时 VNI 仍为源 VNI；目的 VTEP 收到后直接二层转发给目的主机（因为目的主机网关 MAC 相同）。要求目的 VTEP 有目的主机的 ARP 表项。\n- 对称 IRB：源 VTEP 路由后，用目的 VNI 重新封装（外层 VNI 改为目的 VNI），目的 VTEP 再解封装路由一次。需要 Type 5 路由支持，扩展性更好，是当前主流。\n\n## 与相邻技术的分工\n\n- Underlay：负责 VTEP 之间 IP 可达，通常用 OSPF/IS-IS/BGP，配合 ECMP。\n- Overlay 控制平面：BGP EVPN，负责 MAC/IP 可达性、VTEP 成员关系。\n- Overlay 数据平面：VXLAN，负责封装转发。\n- 传统 VLAN：接入侧仍用 VLAN 映射到 VNI，VLAN 只在本地有意义。\n\n## 设计取舍\n\n- 24 bit VNI 换来租户扩展性，代价是 50 字节额外封装开销（外层 IP 20 + UDP 8 + VXLAN 8 + 内层以太网头 14 已存在，实际新增约 50 字节），需调整 Underlay MTU（通常 1600 以上）。\n- 控制平面用 BGP EVPN 增加协议复杂度，但换来无泛洪、快速收敛、ARP 抑制。\n- 头端复制在 VTEP 数量大时复制开销高，可结合组播优化，但组播在 Underlay 部署复杂，多数场景仍用头端复制。\n- 分布式网关避免流量绕行，但要求所有 VTEP 配置一致的网关 IP/MAC，且需要 Type 2/Type 5 路由同步。",
+  "one": "用 UDP 封装二层帧做大规模二层延伸，用 BGP EVPN 做控制面学习的 Overlay 技术。",
+  "analogy": "VXLAN 就像在公司大楼之间修了一条条专用快递通道：你要送的东西本来只能在同一个楼层里传，现在装进统一规格的箱子（外层 IP/UDP 头），写上楼号房号（VNI），就能穿过整座城市的公共马路送到对面楼，而马路怎么走完全不关心箱子里装的什么。EVPN 则相当于给每栋楼配了一本实时更新的通讯录加一份入住登记表，谁搬进来了、住哪个房间、走哪条线路最快，都提前登记好广播出去，不用像以前那样挨家挨户敲门问“你在哪”（也就是老式的泛洪学习）。这样既避免了到处乱喊，也方便管理员统一管控谁能住、能串哪个门。",
+  "body": "## 为什么需要 VXLAN\n\n传统数据中心用 VLAN 做二层隔离，两个硬约束顶到天花板：\n\n- **VLAN ID 只有 12 bit，4094 个可用**。云环境下租户 + 业务 + 隔离域叠加，几千个远远不够。\n- **STP 收敛慢、链路利用率低**。大二层靠 STP 防环，一半链路被阻塞，且故障收敛秒级。\n- 虚拟机迁移要求迁移前后在同一二层域（IP 不变），跨机房/跨城迁移就必须把二层延伸出去，而 VLAN + Trunk 跨广域不现实。\n\nVXLAN（Virtual eXtensible LAN，RFC 7348）用 **MAC-in-UDP** 封装解决这三点：24 bit 的 VNI 给出 1600 万隔离域；封装后走 IP 转发，底层可以用 ECMP/CLOS 全互联，不再依赖 STP；二层帧被装进 IP 包，可以跨三层网络延伸。\n\n## 报文格式与关键字段\n\nVXLAN 报文 = 外层 Ethernet + 外层 IP + UDP（目的端口 **4789**）+ VXLAN Header + 原始二层帧（含内层 Ethernet）。\n\nVXLAN Header 8 字节：\n\n| 字段 | 位宽 | 含义 |\n|---|---|---|\n| Flags | 8 bit | I 位必须为 1，表示 VNI 有效 |\n| Reserved | 24 bit | 保留 |\n| VNI | 24 bit | 租户/隔离域标识，0~16777215 |\n| Reserved | 8 bit | 保留 |\n\n外层五元组：源 IP = 本端 VTEP 地址，目的 IP = 对端 VTEP 地址；源 UDP 端口由设备按内层流哈希生成（用于 ECMP 负载分担），目的端口固定 4789。**这点很重要**：如果设备把源端口固定，底层 Spine 的 ECMP 哈希会退化成单条链路。\n\nVTEP（VXLAN Tunnel End Point）是封装/解封装实体，可以是硬件交换机、软件 vSwitch。同一 VNI 内的 VTEP 之间建立点对点隧道，逻辑上全互联，实际按需建立。\n\n## 数据面：两种转发行为\n\n**二层桥接（L2 VNI）**：\n\n1. 入方向 VTEP 收到内层帧，查该 VNI 下的 MAC 表，命中则直接封装单播发出。\n2. 未命中则泛洪——传统 VXLAN 用 **头端复制（Head-End Replication）**，把帧复制成 N 份，分别封给同 VNI 内所有远端 VTEP。这就是“静态 VXLAN”最大的痛点：**控制面靠数据面泛洪学习**，和传统交换机的源 MAC 学习一模一样。\n\n**三层网关（L3 VNI / 分布式网关）**：\n\n- 集中式网关：所有跨子网流量绕到一台 SVI 上，路径次优、单点带宽瓶颈。\n- 分布式网关（分布式 anycast 网关）：每台 Leaf 都用**相同的网关 IP + 相同的网关 MAC** 配置 SVI，主机网关指向本地 Leaf，跨子网流量在源 Leaf 就完成路由并重新封装进 L3 VNI 直达目的 Leaf。要求所有 Leaf 的网关 MAC 一致（否则主机 ARP 缓存互相打架），并配合 **ARP 抑制**把广播变成控制面通告。\n\n## 控制面：为什么必须是 BGP EVPN\n\n静态 VXLAN 靠泛洪学习，规模一大广播风暴、表项老化、收敛慢全来了。EVPN（RFC 7432）把 **BGP 的 MP_REACH_NLRI 扩展成承载二层和 MAC 信息**，用 BGP 做统一的控制面：\n\n- 地址族：`l2vpn evpn`（AFI=25，SAFI=70）。\n- 路由类型（Route Type）：\n\n| Type | 名称 | 作用 |\n|---|---|---|\n| 1 | Ethernet Auto-Discovery (A-D) | 快速收敛、多归接入 DF 选举、别名（Aliasing）负载分担 |\n| 2 | MAC/IP Advertisement | 通告 MAC、ARP、主机 IP 与 VTEP 的映射 |\n| 3 | Inclusive Multicast Ethernet Tag (IMET) | 通告 VTEP 加入某 VNI，用于构建泛洪列表（替代头端复制的静态配置） |\n| 4 | Ethernet Segment | 多归场景定义 ES，配合 Type 1 做 DF 选举 |\n| 5 | IP Prefix | 通告网段路由（替代对称 IRB 场景下的主机路由） |\n\n**路由目标 RT 就是隔离边界**：Export RT 打上本 VNI/EVI 的标识，Import RT 决定接收哪些 VNI 的路由。RT 配错，现象是“隧道 up、VNI up，但主机就是不通”。\n\n### MAC 地址学习流程（Type 2）\n\n1. 主机 A 上线，本地 VTEP 学到 MAC-A/VNI，生成 Type 2 路由，携带 RD、Ethernet Tag、MAC 长度、MAC、IP（可选）、Label（= VNI 或 L3 VNI）。\n2. 通过 BGP 反射器 RR 传给其他 Leaf。\n3. 远端 Leaf 收到，写入本地 MAC 表：`MAC-A → 下一跳 VTEP，出接口为隧道`。此后到 MAC-A 的帧直接单播封装，**不再泛洪**。\n\n对比：静态 VXLAN 是“先泛洪再学习”（数据驱动），EVPN 是“先通告再转发”（控制驱动）。前者首包必泛洪，后者首包即单播。\n\n### ARP 抑制\n\n主机 B 要访问主机 A 会先发 ARP 广播。Leaf 收到后不泛洪，而是：\n\n- 若本地已有 A 的 ARP 表项（来自 Type 2 路由携带的 host IP）→ 直接代答。\n- 否则转为 BGP EVPN 的**ARP 请求泛洪**（IMET 路由构建的泛洪树），或按需触发。\n\n效果：VNI 内的广播域被压缩成点到点，收敛和风暴问题一并解决。\n\n### 泛洪与 BUM 流量\n\n未知单播、广播、组播（BUM）在 VXLAN 中走 IMET（Type 3）路由构建的泛洪列表：\n\n- **Ingress Replication**：由入方向 VTEP 复制成多份单播，设备需按 VNI 数量 × 远端 VTEP 数量评估复制能力。\n- **组播模式**：底层用 PIM-SM 承载，节省复制开销，但要底层网络支持组播，运维复杂度高。现网多选 Ingress Replication。\n\n## 对称 IRB 与非对称 IRB\n\n- **非对称 IRB**：源 Leaf 路由后把三层包封进源 VNI 发到目的 Leaf，由目的 Leaf 再做一次路由。要求目的 Leaf 有全套 VNI 的 L3 网关配置，扩展性差。\n- **对称 IRB**：源 Leaf 路由后，把包封进**独立的 L3 VNI**（每租户一个），目的 Leaf 用 L3 VNI 解封装后按目的 VNI 转发，**中间设备不需要知道所有 VNI**。这是当前主流（华为文档中常称“对称 IRB 分布式网关”）。L3 VNI 与 L2 VNI 通过 VRF 绑定，VRF 与 VNI 一一对应。\n\n## 与相邻技术的分工\n\n| 技术 | 定位 | 关系 |\n|---|---|---|\n| VLAN | 二层隔离，12 bit | VXLAN 替代其大范围延伸能力，接入侧仍用 VLAN 映射到 VNI |\n| STP/MSTP | 二层防环 | Overlay 内不再需要；Underlay 用路由协议 + ECMP |\n| MPLS L2VPN/VPLS | 运营商二层 VPN | 定位相似，VXLAN 更适配数据中心 IP Underlay 与服务器 vSwitch |\n| EVPN-MPLS | 同一控制面 | EVPN 与封装解耦，同一套路由可跑在 MPLS 或 VXLAN 上 |\n| TRill/SPB | 大二层 | 已被 EVPN VXLAN 事实上取代 |\n\n## 设计取舍\n\n1. **UDP 封装 vs 原生二层**：UDP 让中间设备无感知、NAT/防火墙易穿透，代价是 50~54 字节额外开销，MTU 必须放大（通常 Underlay MTU ≥ 1600，物理口 9000 更稳）。MTU 不足的典型现象是 ping 小包通、大包不通、SSH 卡死。\n2. **控制面用 BGP**：BGP 扩展性好、策略能力强（RT/Community），代价是收敛依赖 BGP 定时器，需要 RR 分层与 BGP 优化（BGP PIC、Add-Path、路由聚合）。\n3. **分布式网关 vs 集中式**：分布式消除次优路径和单点瓶颈，代价是配置一致性要求高（网关 MAC/IP 必须全 Leaf 一致）、故障域变大。\n4. **VNI 与 VLAN 解耦**：接入侧 VLAN 本地有效，映射成 VNI 后跨网无意义，这既带来扩展性也带来排查难度——同一 MAC 在不同 Leaf 上可能属于不同本地 VLAN。",
   "cmds": [
     "display vxlan vni",
     "display vxlan tunnel",
     "display bgp evpn all routing-table",
-    "display mac-address vlan <vlan-id>",
-    "display arp all"
+    "display bridge-domain",
+    "display mac-address bridge-domain 10 verbose"
   ],
   "pits": [
-    "Underlay MTU 不足导致大包丢弃，需调大至 1600 以上",
-    "Type 3 路由未收到导致头端复制列表缺失，广播不通",
-    "分布式网关 Anycast MAC 不一致导致跨 VTEP 转发失败",
-    "对称 IRB 下缺少 Type 5 路由，跨 VNI 流量无法回程",
-    "源端口哈希不均导致 ECMP 负载分担效果差"
+    "Underlay MTU 未放大导致大包不通，先查 ping 分片",
+    "Export/Import RT 不匹配，隧道 up 但主机不通",
+    "网关 MAC 各 Leaf 不一致，主机 ARP 冲突",
+    "源 UDP 端口固定，Spine ECMP 哈希退化",
+    "NVE 口未 undo shutdown 或未配 source，隧道起不来"
   ],
   "qa": [
     {
-      "q": "VXLAN 为什么用 UDP 封装而不是直接 IP 封装？",
-      "a": "UDP 封装可复用现有 NAT/防火墙端口识别，源端口哈希支持 ECMP，且 4789 端口标准化，实现简单，兼容性好。"
+      "q": "EVPN 相比静态 VXLAN 的核心优势是什么？",
+      "a": "控制面驱动：Type 2 路由预先通告 MAC/IP 与 VTEP 映射，首包即可单播，无泛洪学习；配合 Type 3 构建泛洪列表、ARP 抑制消除广播，收敛与规模均优于数据面学习。"
     },
     {
-      "q": "EVPN Type 2 和 Type 3 路由分别解决什么问题？",
-      "a": "Type 2 通告 MAC/IP 可达性，实现控制平面 MAC 学习和 ARP 抑制；Type 3 通告 VTEP 加入 VNI，构建头端复制列表，替代数据平面泛洪。"
+      "q": "为什么分布式网关要求所有 Leaf 的网关 MAC 相同？",
+      "a": "主机网关指向本地 Leaf，若各 Leaf 网关 MAC 不同，主机在迁移或 ARP 应答时会看到不同 MAC，导致 ARP 表项震荡、流量绕行。统一为 anycast MAC 才能保证网关对主机透明。"
     },
     {
-      "q": "对称 IRB 和非对称 IRB 的区别？",
-      "a": "非对称 IRB 源 VTEP 路由一次，VNI 不变，目的 VTEP 二层转发；对称 IRB 源和目的 VTEP 各路由一次，VNI 改为目的 VNI，依赖 Type 5 路由，扩展性更好。"
+      "q": "对称 IRB 与非对称 IRB 的区别？",
+      "a": "对称 IRB 用独立 L3 VNI 承载跨子网流量，中间 Leaf 无需知道所有 VNI，扩展性好；非对称 IRB 用源 VNI 封装，目的 Leaf 需具备全部 VNI 的三层网关，扩展性差。"
+    },
+    {
+      "q": "VNI 与 VLAN 的关系？",
+      "a": "VNI 24 bit 全局标识 Overlay 隔离域，VLAN 12 bit 仅本地有效，接入侧 VLAN 通过桥域映射为 VNI，跨 VTEP 传递的是 VNI，VLAN 标签被剥离。"
     }
   ],
-  "syllabus": "HCIE-Datacom 交换技术"
+  "syllabus": "HCIE-Datacom VXLAN 与 EVPN 技术（数据中心 Overlay 网络）"
 }

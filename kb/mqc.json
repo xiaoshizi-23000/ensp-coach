@@ -1,0 +1,55 @@
+{
+  "id": "mqc",
+  "title": "MQC 与策略路由",
+  "level": "HCIP",
+  "cat": "路由",
+  "keys": [
+    "MQC",
+    "Modular QoS Command-Line",
+    "流分类",
+    "流行为",
+    "流策略",
+    "PBR",
+    "Policy-Based Route",
+    "策略路由",
+    "traffic classifier",
+    "traffic behavior",
+    "traffic policy"
+  ],
+  "one": "用流分类+流行为+流策略三件套，把流量挑出来再做重定向等动作。",
+  "analogy": "MQC 像快递分拣中心：先按面单规则把包裹分堆（流分类），每堆贴一张处理单，比如加急、改道、退回（流行为），最后把分堆规则和处理单绑在一起挂到传送带上（流策略）。策略路由就是其中一张处理单写着“这堆别按原路线走，改走我指定的下一跳”。",
+  "body": "## 为什么需要 MQC\n\n传统 QoS 配置是“一个功能一套命令”：限速用 `car`、重标记用 `remark`、重定向用 `redirect`、队列用 `queue`，每加一个功能就要在接口上再挂一条命令，功能一多接口配置就变成一锅粥，而且不同功能之间的匹配条件无法复用。\n\nMQC（Modular QoS Command-Line）把“匹配什么”和“怎么处理”拆成两个独立模块，再用一个策略把两者绑定，实现**匹配与动作解耦**。这样同一套流分类可以被多个流行为复用，同一套流行为也可以被多个流分类引用，配置可读性和可维护性大幅提升。策略路由（PBR，Policy-Based Route）在华为 VRP 上就是 MQC 框架里的一种流行为动作，不是独立的一套命令体系。\n\n## 三件套的职责\n\n| 组件 | 命令视图 | 职责 |\n|---|---|---|\n| 流分类 traffic classifier | `traffic classifier NAME operator or/and` | 定义匹配规则（ACL、VLAN、DSCP、802.1p、MAC、IP 五元组等） |\n| 流行为 traffic behavior | `traffic behavior NAME` | 定义动作（permit/deny、remark、car、redirect、queue、accounting 等） |\n| 流策略 traffic policy | `traffic policy NAME` | 把 classifier 和 behavior 一一绑定 |\n\n流策略本身不生效，必须通过 `traffic-policy NAME inbound/outbound` 挂到接口、VLAN、全局或控制平面，才真正下发到转发面。\n\n### operator or 与 and\n\n- `operator or`（默认）：多条规则之间是**或**关系，命中任意一条即算匹配。\n- `operator and`：多条规则必须**同时**满足。注意 and 模式下各规则之间是逻辑与，但同一条 ACL 内部仍按 ACL 自身的匹配逻辑（permit/deny 与掩码）执行，两者不要混淆。\n\n一个流分类里可以 `if-match` 多条规则，但同一类型（比如两个 ACL）在部分版本上只允许一条，需要合并 ACL 或改用 and 组合不同类型的条件。\n\n## 匹配优先级与执行顺序\n\n接口上可以同时挂多个流策略（inbound 和 outbound 各一个），但**同一方向只能挂一个流策略**。一个流策略内部多个 classifer 按配置顺序（部分平台按 precision 优先级）匹配，**命中第一个就停止**，不再往下匹配。这一点和 ACL 的“继续往下找”不同，是现场最容易出错的地方：把宽泛的规则配在前面，后面的精细规则永远不生效。\n\n流策略内部还有一个隐含的 class-default（默认类），未命中任何 classifier 的流量走默认行为，通常是 permit 不做处理。\n\n## 策略路由的动作\n\n在流行为里配置重定向动作，就构成了策略路由：\n\n- `redirect ip-nexthop A.B.C.D`：重定向到指定下一跳 IP。\n- `redirect interface GigabitEthernet0/0/1`：重定向到指定出接口。\n- `redirect ipv6-nexthop`：IPv6 场景。\n- `redirect remote`：重定向到远端（部分平台支持）。\n\n重定向的本质是**在路由查找之前改写转发决策**：报文进来后先过 MQC，命中重定向行为就直接用指定的下一跳/出接口封装转发，跳过目的地址查 FIB 的过程。因此策略路由的优先级高于普通目的路由，但低于某些平台上的本地直连和黑洞路由，具体以产品文档为准。\n\n### 重定向到下一跳 vs 出接口\n\n- **下一跳**：需要能递归到出接口，会做 ARP 解析，适合多路接入、需要保留二层封装的场景。下一跳不可达时行为取决于平台，可能走原路由也可能丢弃，要实测。\n- **出接口**：直接指定物理口，适合点到点链路（如 PPP、HDLC）或明确知道对端就在该口的场景。以太网口上指定出接口而不指定下一跳，可能触发代理 ARP 或广播，需谨慎。\n\n### 与 Track/ NQA 联动\n\n生产环境里策略路由常和 NQA + Track 联动：NQA 探测下一跳可达性，Track 关联探测结果，流行为里引用 Track 对象。探测失败时重定向行为失效，流量回落到正常路由，避免“策略路由把流量引到黑洞”。这是策略路由能否上生产的关键设计。\n\n## 与相邻技术的分工\n\n| 技术 | 决策依据 | 作用点 |\n|---|---|---|\n| 普通路由 | 目的地址 | 控制面 FIB |\n| 策略路由 PBR | 五元组/ACL 等 | 转发面，路由查找前 |\n| 路由策略 Route-Policy | 路由属性 | 控制面，路由引入/过滤时 |\n| 流量监管 CAR | 速率 | 转发面，MQC 行为之一 |\n\n要区分**策略路由**和**路由策略**：前者管数据报文怎么走，后者管路由条目怎么进出现路由表。考试和面试里这两个概念经常被拿来对比。\n\n## 设计取舍\n\nMQC 把匹配和动作解耦，代价是配置层级变多、排错链路变长：一个报文没按预期走，要依次确认接口是否挂了策略、方向对不对、classifier 是否命中、behavior 动作是否生效、Track 是否 up。另外流策略在部分低端盒式设备上是软件转发或有限硬件表项，大规模 ACL 会消耗 TCAM，需要评估规格。\n\n策略路由绕开了路由表，天然带来**非对称路径**和**回程不可达**风险：去程被重定向，回程仍按目的地址走原路由，可能被防火墙或 uRPF 丢弃。部署前必须确认回程路径，必要时在反向设备上也配策略路由，或关闭严格 uRPF。",
+  "cmds": [
+    "display traffic classifier user-defined",
+    "display traffic behavior user-defined",
+    "display traffic policy user-defined",
+    "display traffic-policy applied-record",
+    "display current-configuration | include traffic-policy"
+  ],
+  "pits": [
+    "同一方向只能挂一个流策略，多个策略要合并",
+    "流策略内命中第一个 classifier 即停止，宽泛规则别放前面",
+    "重定向下一跳不可达时行为依平台而异，务必配 NQA+Track",
+    "策略路由只改去程，回程可能被 uRPF 或防火墙丢弃",
+    "and 模式与 ACL 内部逻辑易混淆，验证时用 display 确认命中"
+  ],
+  "qa": [
+    {
+      "q": "MQC 三件套分别是什么，各自作用？",
+      "a": "流分类定义匹配规则，流行为定义动作，流策略把两者绑定；流策略需挂到接口/全局才生效。"
+    },
+    {
+      "q": "策略路由和路由策略的区别？",
+      "a": "策略路由按五元组在转发面改写数据报文转发路径；路由策略在控制面过滤或修改路由条目属性。"
+    },
+    {
+      "q": "流策略内多个 classifier 如何匹配？",
+      "a": "按配置顺序匹配，命中第一个即停止，不再继续匹配后续 classifier。"
+    },
+    {
+      "q": "策略路由如何避免下一跳失效导致断网？",
+      "a": "用 NQA 探测下一跳，Track 关联探测结果，流行为引用 Track，失效时回落到正常路由。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 路由技术（QoS 与策略路由部分）"
+}

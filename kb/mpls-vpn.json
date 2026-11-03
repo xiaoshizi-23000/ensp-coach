@@ -1,0 +1,53 @@
+{
+  "id": "mpls-vpn",
+  "title": "MPLS VPN 架构与 RD/RT",
+  "level": "HCIE",
+  "cat": "广域",
+  "keys": [
+    "MPLS VPN",
+    "BGP/MPLS IP VPN",
+    "RD",
+    "Route Distinguisher",
+    "RT",
+    "Route Target",
+    "VRF",
+    "VPNv4",
+    "L3VPN"
+  ],
+  "one": "用 VRD/VRF 隔离私网、用 RD 区分前缀、用 RT 控制路由互导的 BGP/MPLS IP VPN 架构。",
+  "analogy": "把运营商网络想成一栋超大的公寓楼，每家公司都想在里面有个自己的独立套间。VRF 就是给每家公司单独隔出来的套间，套间里的桌椅（私网路由）彼此看不见。可问题来了：两家公司用了同一个工号 001 号员工（相同私网网段 10.1.1.0/24），快递员（PE）送到楼下就分不清了。RD 就是在员工工号前面加盖一个公司编号，变成「A 公司-001」「B 公司-001」，全国唯一。RT 则是贴在包裹上的准入标签：只有贴了「A 公司」标签的包裹才准进 A 公司的门，A 公司想给 B 公司送份文件，就额外贴一张「B 公司」的标签。",
+  "body": "## 1. 问题从哪来：私网要跨公网，且地址可以重叠\n\n传统做法是给每个客户拉专线，成本高、开通慢、拓扑固定。MPLS VPN 要解决的是：**让多个客户的私网在同一张运营商 IP/MPLS 骨干上同时承载，彼此隔离，且允许地址空间重叠**。\n\n三个硬需求直接决定了架构：\n\n| 需求 | 对应机制 |\n|---|---|\n| 客户地址可重叠、彼此不可见 | VRF（路由表 + 转发表实例隔离） |\n| 同一前缀在骨干上要能区分属于谁 | RD 拼进 NLRI，形成 VPNv4 前缀 |\n| 路由该进哪个客户的 VRF、该发给谁 | RT，用 BGP Extended Community 携带 |\n\n理解这三者的分工，是这一章的全部关键：**VRF 管隔离，RD 管唯一标识，RT 管分发策略**。很多人把 RD 和 RT 混成一件事，其实 RD 只在控制平面用来构造唯一的 VPNv4 前缀，转发面根本不用它；RT 只在路由导入导出时生效，不参与转发查表。\n\n## 2. 架构角色与平面划分\n\n- **CE**（Customer Edge）：客户侧设备，可以是路由器或交换机，通常不感知 MPLS。\n- **PE**（Provider Edge）：核心，维护 VRF、跑 MP-BGP、做 VPN 标签栈的压入和弹出。\n- **P**（Provider）：骨干转发设备，**只需要支持 MPLS 转发和 IGP，不需要知道任何 VPN 信息**，这是 MPLS VPN 可扩展性的根本来源。\n\n平面划分：\n\n1. **数据平面**：CE↔PE 之间是普通 IP 转发（或静态/IGP/BGP）；PE↔P↔PE 之间是两层标签的 MPLS 转发。\n2. **控制平面**：PE 之间用 MP-BGP 交换 VPNv4 路由；PE 与 P 之间只跑 IGP + LDP/SR。\n\n这种「P 设备零 VPN 状态」的设计，使 VPN 数量增长只影响 PE，不影响骨干转发设备，是 2547bis 相比早期 overlay（如 IPsec、GRE、ATM PVC 全互联）的核心优势。\n\n## 3. VRF：隔离的落地载体\n\nPE 上每接入一个 VPN 实例，就创建一套 VRF：\n\n- 独立的路由表（`display ip routing-table vpn-instance X`）\n- 独立的路由协议实例（VRF 内的 static/OSPF/BGP）\n- 绑定到接口（`ip binding vpn-instance X`）\n- 关联 RD 与 RT 的 import/export 策略\n\n从 CE 收到报文，PE 在绑定 VRF 的接口上查该 VRF 的路由表，查表结果若是 VPNv4 学来的路由，则得到「内层私网标签 + 下一跳」，再加上外层隧道标签转发。\n\n**关键点**：PE 上全局路由表与各 VRF 路由表互相独立；PE 与 P 之间的接口属于全局表，不绑定 VRF。\n\n## 4. RD：让重叠前缀在控制平面唯一\n\n### 4.1 格式\n\nRD 是 8 字节，拼在 IPv4 前缀（4 字节）前面构成 12 字节的 **VPNv4 前缀**，承载在 MP-BGP 的 MP_REACH_NLRI 属性里（AFI=1, SAFI=128）。\n\nRD 三种编码格式：\n\n| Type | 字段 | 长度 |\n|---|---|---|\n| 0 | 2 字节 ASN : 4 字节赋值 | 8 字节 |\n| 1 | 4 字节 IPv4 地址 : 2 字节赋值 | 8 字节 |\n| 2 | 4 字节 ASN : 2 字节赋值 | 8 字节 |\n\n常见配置是 Type 1（`1.1.1.1:100`）或 Type 0（`65000:100`）。\n\n### 4.2 RD 到底解决什么\n\n两个客户都有 `10.1.1.0/24`。若 PE 直接通告 IPv4 前缀，BGP 会认为是同一条路由而做最优选择，另一个客户的路由就丢了。加了 RD：\n\n- 客户 A：`RD_A:10.1.1.0/24`\n- 客户 B：`RD_B:10.1.1.0/24`\n\n在 VPNv4 地址族里这是两条完全不同的 NLRI，可以共存。**RD 的唯一性只需要在「需要互通的 PE 集合」范围内保证**，实践中通常每个 PE 给每个 VRF 分配全网唯一的 RD（常用 loopback:序号 或 AS:序号）。\n\n### 4.3 常见误解\n\n- RD 不决定路由进哪个 VRF（那是 RT 的事）。\n- RD 不参与数据面转发，报文里没有 RD 字段。\n- 同一 VRF 的 RD 不要求与对端 PE 一致；不同 PE 上同一客户的 VRF 用不同 RD 也能互通（甚至可以做 hub-spoke 或多路径）。但如果 RD 一致而 RT 不同，反而容易引起排错困惑，工程上建议**同一 VPN 内 RD 统一规划**。\n\n## 5. RT：路由的分发阀门\n\n### 5.1 载体与格式\n\nRT 是 BGP **Extended Community** 属性（Type 0x00 两字节 AS 或 0x02 四字节 AS），8 字节，格式与 RD 类似。一条路由可携带多个 RT。\n\n### 5.2 Export / Import 两个动作\n\n- **Export**：本地 VRF 内的路由转成 VPNv4 路由发布给其他 PE 时，附加本 VRF 的 export RT。\n- **Import**：PE 收到 VPNv4 路由后，逐个比对本地各 VRF 的 import RT 列表，匹配则导入该 VRF 的 IPv4 路由表。\n\n一条路由可以被导入多个 VRF（一个 RT 匹配多个 import），这是实现**共享服务（如共享防火墙、共享 DNS）和 Extranet** 的基础。\n\n### 5.3 RT 匹配的本质\n\nBGP 本身不做「按 RT 选路」，是 PE 的 VRF 配置驱动导入。因此：\n\n- RT 匹配是**集合交集**：路由携带的 RT 集合 ∩ VRF 的 import RT 集合 ≠ ∅ 即导入。\n- 若同一 VPNv4 前缀以不同 RT 从多个 PE 收到，且都导入同一 VRF，则按 BGP 选路规则选最优。\n\n### 5.4 用 RT 设计拓扑\n\nRT 是拓扑设计的利器，因为它是**策略而非拓扑绑定**：\n\n| 拓扑 | RT 设计 |\n|---|---|\n| Full Mesh | 所有 PE 用相同 export/import RT，如 `100:1` 双向 |\n| Hub-Spoke | Spoke export `100:1`、import `100:2`；Hub export `100:2`、import `100:1` 与 `100:2` |\n| Extranet | 两端 VRF 的 import 列表互相加入对方的 export RT |\n| 共享服务 | 服务中心 VRF export 服务 RT，所有客户 VRF import 该 RT |\n\nHub-Spoke 的关键细节：Spoke 之间不能互访，靠的是 Spoke 不 import 对方的 export RT；Hub 需要 import 全部 Spoke 的 RT，并把自己的 RT export 给 Spoke，同时 Hub 上常配 `next-hop` 或 `default-route` 引导。\n\n## 6. 数据面：两层标签怎么走\n\n以 CE-A1 → CE-B1 为例：\n\n1. CE-A1 发普通 IP 包，目的 `10.1.1.1`。\n2. PE-A 在绑定的 VRF 中查表，命中 VPNv4 路由，得到：内层标签（VPN 标签，由对端 PE 通过 VPNv4 路由的标签字段分配）+ 下一跳（PE-B loopback）。\n3. PE-A 压入两层标签：外层是到 PE-B 的 LDP/SR 隧道标签（由 IGP 路由决定），内层是 VPN 标签。\n4. P 设备只查外层标签转发，**全程不感知 VPN**。\n5. PE-B 弹出外层，看到内层 VPN 标签，按「标签 → VRF」映射（ILM 表）弹出内层并确定出接口与 VRF。\n6. PE-B 在对应 VRF 中查 `10.1.1.1`，发往 CE-B1。\n\n**内层标签的分配**是易错点：VPN 标签不是 PE-A 分配的，是**对端 PE-B 在把本地 VRF 路由转成 VPNv4 路由时分配并随路由通告**的（BGP 的 NLRI 携带 label 字段，在 MP_REACH_NLRI 中）。所以 PE-A 只是「收到什么标签就用什么标签」。\n\n## 7. 控制平面细节：MP-BGP 与 VPNv4\n\n- PE 之间建立 **MP-IBGP** 邻居（通常全互联或 RR），使能 `vpnv4` 地址族。\n- VPNv4 路由的 Next-Hop 是 PE 的 loopback，因此需要 PE 之间 Next-Hop 可达（IGP 或 `next-hop-local`）。\n- 因为 IBGP 水平分割，PE 数量多时用 **RR**（Route Reflector）扩展。RR 只反射 VPNv4 路由，可用 `undo policy vpn-target` 让 RR 不过滤 RT（否则 RR 需为每个 VPN 配置 VRF 或关闭 RT 过滤）。\n- 华为设备上 `route-distinguisher` 与 `vpn-target` 在 `ip vpn-instance` 视图下配置；`vpn-target X both` 等价 export+import。\n\n**为什么用 BGP 而不是 IGP 传 VPN 路由**：BGP 的 Extended Community、AS_PATH、路由策略能力天然适配跨域和策略控制；且 BGP 只在 PE 之间跑，P 设备无状态。\n\n## 8. 与其他技术的分工和取舍\n\n| 技术 | 隔离层次 | 是否允许地址重叠 | 状态在哪 |\n|---|---|---|---|\n| GRE / IPsec | 隧道 | 允许 | 两端 |\n| VLAN / VXLAN | 二层 | 允许 | 边缘 |\n| MPLS L3VPN | 三层 | 允许 | PE（VRF） |\n| MPLS L2VPN（VPLS/VPWS） | 二层 | 允许 | PE（VSI） |\n\n取舍点：\n\n- **可扩展性**：P 设备无 VPN 状态，VPN 数增长只压 PE 的 VRF 与 BGP 路由量。\n- **转发开销**：每包多 4~8 字节标签，换来查表一次而非隧道封装解封装两次。\n- **控制平面依赖**：MP-BGP 是单点复杂度，RR 与 RT 规划失误影响面大。\n- **与 SR 的关系**：外层隧道可由 LDP 换成 SR-MPLS（SR 标签替代 LDP 标签），VPNv4 与 RD/RT 机制不变；进一步可演进到 EVPN（SAFI 70），用 RT 做 EVPN 实例的导入导出，思路一脉相承。\n\n## 9. 排错主线\n\n1. `display bgp vpnv4 all peer` 看邻居与地址族是否 Established。\n2. `display bgp vpnv4 vpn-instance X routing-table` 看路由是否收到、RT 是否正确、Next-Hop 是否可达。\n3. `display ip routing-table vpn-instance X` 看是否成功 import 进 VRF。\n4. `display mpls lsp` / `display mpls label-stack` 看外层隧道与内层标签是否正常。\n5. CE 侧 ping 不通时，先确认两端 VRF 的 RT 是否互为 import/export，再看 PE 到 CE 的接口是否绑定 VRF。",
+  "cmds": [
+    "display ip vpn-instance verbose",
+    "display bgp vpnv4 all routing-table",
+    "display bgp vpnv4 vpn-instance vpn1 routing-table",
+    "display ip routing-table vpn-instance vpn1",
+    "display mpls lsp"
+  ],
+  "pits": [
+    "RD 只保证 VPNv4 前缀唯一，路由进哪个 VRF 由 RT 决定，别混",
+    "VPN 内层标签由对端 PE 分配随路由通告，本地不生成",
+    "PE 间 Next-Hop 必须可达，否则路由有效但不优不转发",
+    "RR 上默认按 RT 过滤，需 undo policy vpn-target 或配 VRF",
+    "同一 VPN 各 PE 的 RD 规划不一致会加大排错难度"
+  ],
+  "qa": [
+    {
+      "q": "RD 和 RT 的区别是什么？",
+      "a": "RD 8 字节，拼在前缀前构成 VPNv4 NLRI，只用于控制平面区分重叠前缀；RT 是 Extended Community，用于 VRF 的 export/import 策略，决定路由进哪个 VRF，不参与转发。"
+    },
+    {
+      "q": "为什么 P 设备不需要知道 VPN 信息？",
+      "a": "PE 之间用两层标签，外层由 LDP/SR 提供到对端 PE 的隧道，P 只按外层标签转发；VPN 信息只在 PE 的 VRF 和 MP-BGP 中存在，故 P 零 VPN 状态。"
+    },
+    {
+      "q": "VPN 内层标签是谁分配的？",
+      "a": "由对端 PE 在把本地 VRF 路由转为 VPNv4 路由时分配，随 MP_REACH_NLRI 的 label 字段通告；本端 PE 收到即用，不自行分配。"
+    },
+    {
+      "q": "如何用 RT 实现 Hub-Spoke？",
+      "a": "Spoke export 统一 RT1、import RT2；Hub export RT2、import RT1 和 RT2；Spoke 之间不互导 RT 故不能直通，流量经 Hub 中转。"
+    }
+  ],
+  "syllabus": "HCIE-Datacom VPN 技术（BGP/MPLS IP VPN 架构、RD/RT 规划）"
+}

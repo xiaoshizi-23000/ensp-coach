@@ -6,44 +6,47 @@
   "keys": [
     "路由策略",
     "策略路由",
-    "Route-Policy",
+    "Routing Policy",
+    "Policy-Based Routing",
     "PBR",
-    "Policy-Based Route"
+    "Route-Policy",
+    "Traffic-Filter",
+    "Traffic-Policy"
   ],
-  "one": "路由策略过滤/修改路由表，策略路由则让报文按策略转发，不查路由表。",
-  "analogy": "路由策略就像公司修改员工通讯录：决定谁进通讯录、电话写多少号，但打电话时还是按通讯录拨。策略路由则像老板直接给秘书一张VIP名单：名单上的人来电，不管通讯录怎么写，一律转接老板专线。一个管名单本身，一个管通话怎么接。",
-  "body": "## 为什么容易混淆\n\n两者名字都带“策略”，配置里都常见 route-policy 字样，但作用对象完全不同：\n\n- **路由策略（Routing Policy）**：操作对象是**路由条目**，影响路由表里有什么、路由属性是什么。它不直接转发数据，只影响路由的生成、接收和发布。\n- **策略路由（Policy-Based Routing，PBR）**：操作对象是**数据报文**，在转发平面根据策略直接指定下一跳或出接口，不依赖路由表（或先于路由表）。\n\n一句话：路由策略管“路怎么修”，策略路由管“车怎么走”。\n\n## 路由策略（Routing Policy）\n\n### 本质\n\n路由策略是一组工具的总称，核心是 **route-policy**，配合 ACL、IP-Prefix、AS-Path-Filter、Community-Filter 等匹配工具，在路由协议收/发路由时执行过滤和属性修改。\n\n### route-policy 的节点结构\n\n一个 route-policy 由多个 node 组成，每个 node 有：\n\n- **node 编号**：从小到大匹配，默认步长 10。\n- **if-match 子句**：匹配条件，如 `if-match ip-prefix P1`、`if-match community-filter 1`、`if-match as-path-filter 1`。同一 node 内多个 if-match 是“与”关系；不写 if-match 表示匹配所有。\n- **apply 子句**：匹配后执行的动作，如 `apply cost`、`apply preference`、`apply community`、`apply ip-address next-hop`。\n- **匹配模式**：`permit` 或 `deny`。permit 表示匹配后执行 apply 并允许通过；deny 表示匹配后拒绝该路由。\n\n匹配流程：路由进入 route-policy，从最小 node 开始逐个检查 if-match。若某 node 所有 if-match 都满足，则执行该 node 的 apply 和 permit/deny 动作，**不再向下匹配**。若都不满足，继续下一个 node。所有 node 都不匹配时，默认行为是 **deny**（不同厂商有差异，VRP 中 route-policy 末尾隐含 deny）。\n\n### 典型应用场景\n\n1. **路由过滤**：在协议视图下用 `filter-policy` 调用 ACL/IP-Prefix，或在邻居上调用 route-policy，控制哪些路由能进路由表或发给邻居。\n2. **路由属性修改**：在 BGP 中修改 Local_Preference、MED、AS_Path、Community，影响选路。\n3. **路由引入时打标签**：在 import-route 时调用 route-policy，给引入的路由设置 tag 或 cost，便于后续过滤。\n\n### 设计取舍\n\n- route-policy 是**控制平面**工具，只影响路由表，不直接影响已建立的数据流。修改后需要等待路由收敛。\n- 匹配工具分离：ACL 匹配目的/源地址，IP-Prefix 匹配前缀和掩码范围，AS-Path-Filter 匹配 AS 路径，Community-Filter 匹配 BGP 团体属性。这种分离让配置更灵活，但也增加了学习成本。\n\n## 策略路由（PBR）\n\n### 本质\n\nPBR 在**转发平面**对报文进行策略匹配，匹配后直接指定下一跳、出接口或修改报文优先级，**不查路由表**（或先于路由表）。\n\n### 实现方式\n\nVRP 中 PBR 通过 **traffic-filter** 或 **traffic behavior** 实现，通常用 MQC（模块化 QoS 命令行）框架：\n\n1. 用 `traffic classifier` 定义流分类，匹配 ACL、VLAN、DSCP 等。\n2. 用 `traffic behavior` 定义动作，如 `redirect ip-nexthop`、`redirect interface`、`remark dscp`。\n3. 用 `traffic policy` 绑定 classifier 和 behavior。\n4. 在接口入方向应用 `traffic-policy`。\n\n匹配到流后，执行 behavior 中的重定向动作，报文从指定下一跳或接口转发，不再查路由表。\n\n### 与路由表的关系\n\n- PBR 优先于路由表：报文先匹配 PBR 策略，命中则按策略转发；未命中才查路由表。\n- PBR 可以基于源地址、目的地址、协议、端口等五元组，比路由表更细粒度。\n- PBR 通常用于**入方向**，在接口上应用。\n\n### 设计取舍\n\n- PBR 是**数据平面**工具，直接影响转发，配置错误会立即导致业务中断。\n- PBR 不感知路由收敛，若重定向的下一跳不可达，报文可能被丢弃（取决于配置，可配置 track 联动）。\n- PBR 增加转发面查表开销，高密度策略可能影响性能。\n\n## 对比总结\n\n| 维度 | 路由策略 | 策略路由 |\n|------|----------|----------|\n| 作用对象 | 路由条目 | 数据报文 |\n| 作用平面 | 控制平面 | 转发平面 |\n| 是否查路由表 | 是（最终转发仍查表） | 否（命中策略直接转发） |\n| 匹配依据 | 路由属性（前缀、AS_Path、Community 等） | 报文五元组、VLAN、DSCP 等 |\n| 典型工具 | route-policy、filter-policy、IP-Prefix | MQC、traffic-policy、PBR |\n| 影响范围 | 路由表内容，间接影响转发 | 直接决定报文转发路径 |\n| 收敛影响 | 需要等待路由收敛 | 立即生效，不依赖路由收敛 |\n\n## 现场如何选择\n\n- 要控制**哪些路由能被学习或发布**、修改路由属性影响选路 → 用路由策略。\n- 要基于**源地址、应用端口**等让特定流量走特定链路，且不想改动路由表 → 用策略路由。\n- 两者可叠加：先用路由策略保证路由表正确，再用 PBR 对特定业务流做精细调度。\n\n## 常见误区\n\n- 认为 route-policy 能直接转发报文：不能，它只操作路由。\n- 认为 PBR 会修改路由表：不会，PBR 只影响转发，路由表不变。\n- 在 route-policy 中忘记配置 permit 节点导致路由被默认 deny：VRP 中 route-policy 末尾隐含 deny，需显式配置 permit 节点。\n- PBR 重定向的下一跳不可达时未配置 track，导致流量黑洞。",
+  "one": "路由策略管路由，策略路由管报文，作用对象和生效位置完全不同。",
+  "analogy": "路由策略像小区门口的告示牌规则：它决定哪条路能进你的导航地图、进地图时标多少优先级和开销——它改的是地图，不是车。策略路由像路上的交警：车开到路口时，交警看一眼车牌（源地址、端口、协议），直接指挥这辆车左转还是右转，根本不理会导航地图上写着走哪条。地图改错了车可能绕远，交警指挥错了车可能直接走错。两者一个管“路怎么被选中”，一个管“包怎么被转发”。",
+  "body": "## 一、为什么容易混\n\n两个词中文只差一个字，英文一个是 Routing Policy、一个是 Policy-Based Routing，缩写一个是 RP、一个是 PBR。但它们在设备内部的生效位置差了好几层：\n\n- **路由策略（Routing Policy）** 作用在 **控制平面（Control Plane）**：它处理的对象是 **路由条目**（前缀 + 属性），进入 RIB 之前或从 RIB 发布出去时被过滤、被修改属性。它不接触任何一个数据报文。\n- **策略路由（PBR，Policy-Based Routing）** 作用在 **转发平面（Forwarding Plane）**：它处理的对象是 **数据报文**，在接口收到报文后、查 FIB 之前，先按 ACL 匹配报文特征（源/目的 IP、协议、端口、报文长度、DSCP 等），命中后强行指定下一跳、出接口，甚至丢弃。\n\n一句话判断：**能不能改变一个具体报文的转发路径，而不改变任何路由表？能，那就是策略路由。**\n\n## 二、路由策略（Routing Policy）机制\n\n### 2.1 三类常用工具\n\n| 工具 | 粒度 | 典型用途 |\n|---|---|---|\n| filter-policy（acl/ip-prefix） | 前缀级，只过滤不改属性 | 控制 RIB 里收哪些路由 |\n| route-policy | 前缀 + 属性，可 set 可 if-match | 改 Local_Preference、MED、Community、Tag、AS_Path、Next-Hop |\n| ip-prefix / as-path-filter / community-filter | 匹配器 | 作为 route-policy 的 match 条件 |\n\n### 2.2 Route-Policy 的执行模型\n\n一个 route-policy 由若干 **node** 组成，node 有编号（默认步长 10）。匹配顺序是 **node 编号从小到大**，逐个检查：\n\n1. 进入当前 node，执行该 node 下所有 `if-match` 子句。\n2. **同一 node 内多个 if-match 之间是“与”关系**（不同类别之间），同一类别的多个值是“或”关系；但 `if-match` 与 `apply` 之间是“匹配则执行”。\n3. 若匹配成功：执行该 node 的 `apply` 子句，然后 **是否继续匹配后续 node 取决于 node 的 permit/deny 模式**：\n   - `permit`：执行 apply 后 **直接跳出** 整个 route-policy，返回 permit（不再看后面的 node）。\n   - `deny`：该 node 匹配即拒绝，直接返回 deny，不再看后面的 node。\n4. 若当前 node 未匹配：继续下一个 node。\n5. 所有 node 都未匹配：**最终结果是 deny**（这是最关键的一条，很多人漏配 `node 100 permit node 20` 导致其他路由被误杀）。\n\n关键细节：**node 之间的先后顺序决定了哪条规则先生效**，而 node 号不是装饰。同一前缀同时被 node 10（deny）和 node 20（permit）覆盖时，永远走 node 10。\n\n### 2.3 典型应用场景\n\n- **路由引入时打标签/改属性**：`import-route static route-policy RP-STATIC`，在引入 OSPF/IS-IS 时给外部路由设 tag、设 MED、设 metric-type。\n- **BGP 选路干预**：inbound 改 Local_Preference（越大越优），outbound 改 MED（越小越优）、AS_Path 加长度。\n- **路由过滤**：通过 `filter-policy export` 控制哪些路由不发布出去，通过 `filter-policy import` 控制哪些路由不进 RIB。\n- **路由聚合的附加属性**：`aggregate` 后配合 route-policy 给聚合路由打 tag，便于对端识别。\n\n### 2.4 设计取舍\n\n路由策略的代价是 **收敛依赖**：改一条属性，要靠协议自身的更新报文传播出去，全网感知需要时间；而它换来的是 **可预测、可回退、无状态**——路由表里看到什么，转发就走什么，排障路径短。\n\n另外要分清 **filter-policy 与 route-policy**：filter-policy 只能“过/不过”，不能改属性；并且它在 OSPF 中 **import 方向只影响本地 RIB，不影响 LSA 泛洪**（这是高频考点），而 BGP 中 import/export 才是真的影响邻居收发的路由。\n\n## 三、策略路由（PBR）机制\n\n### 3.1 在转发流程中的位置\n\n报文进接口 → 先做 **PBR 匹配**（本地策略路由 Local PBR 例外，它作用于本机产生的报文）→ 未命中则走正常 FIB 查表。所以 PBR 的优先级 **高于** 目的地址查表，但 **低于** 一些更前置的处理（如 ACL 丢包、URPF 的部分实现顺序依版本而异，需实测）。\n\n### 3.2 匹配与动作\n\n- 匹配条件：ACL（`acl 3000`）或 `if-match` 多条（协议、源/目的 IP、源/目的端口、DSCP、报文长度范围）。\n- 动作：\n  - `apply ip-address next-hop X.X.X.X`（改下一跳，需该下一跳在路由表可达或配置 `redirect` 允许）\n  - `apply output-interface Gx/x/x`（改出接口，点到点链路常用）\n  - `apply ip-precedence` / `apply dscp`（打 QoS 标记）\n  - 不匹配则走正常转发。\n\n### 3.3 三种形态\n\n| 形态 | 作用点 | 说明 |\n|---|---|---|\n| 接口 PBR（`ip policy-based-route`） | 接口入方向 | 最常用，作用于该接口收到的报文 |\n| 本地 PBR（`ip local policy-based-route`） | 本机产生的报文 | 管设备自己发出的流量，如管理流量 |\n| 智能策略路由（Smart Policy Routing） | 多出口链路 | 按链路质量、带宽动态选出口，常用于双运营商接入 |\n\n### 3.4 PBR 与 Traffic-Policy 的分工\n\n两者都在转发面，都要 ACL 匹配，很容易搞混：\n\n- **PBR**：改的是 **往哪走**（下一跳/出接口）。\n- **Traffic-Policy（MQC）**：改的是 **怎么走**（限速、标记、排队、丢弃），也可以 `redirect` 到某个接口，但它的主体是流量整形/监管。\n\n实际项目里经常两层一起上：先 MQC 限速标记，再 PBR 引流。\n\n### 3.5 设计取舍\n\nPBR 换来的是 **不依赖路由表的精细引流能力**，代价是：\n\n1. **状态化配置、难维护**：ACL 一改就影响引流结果，容易和路由规划脱节。\n2. **绕过 FIB 可能破坏回程对称**：去程被 PBR 引到 A 链路，回程仍按目的地址走 B 链路，容易触发防火墙状态检测丢包或 URPF 丢弃。\n3. **对设备性能有影响**：每个报文多一次 ACL 匹配，大流量场景要注意芯片能力。\n4. **故障切换不自愈**：PBR 指定的下一跳挂了，除非配置 `nexthop` 可达性检测（或 Smart Policy Routing），否则流量黑 hole。\n\n## 四、一张表说清区别\n\n| 维度 | 路由策略 Routing Policy | 策略路由 PBR |\n|---|---|---|\n| 作用对象 | 路由条目（前缀 + 属性） | 数据报文 |\n| 所在平面 | 控制平面 | 转发平面 |\n| 生效位置 | RIB 导入/导出、协议引入、BGP 邻居收发 | 接口入方向 / 本机出方向 |\n| 匹配工具 | ip-prefix、ACL、as-path-filter、community-filter | ACL（高级 ACL）、if-match |\n| 可否改路由属性 | 可以（LP/MED/Tag/Community/AS_Path） | 不能 |\n| 可否改转发路径 | 间接（先改路由表，再由 FIB 体现） | 直接（绕过 FIB） |\n| 收敛速度 | 依赖协议收敛 | 立即生效 |\n| 典型命令 | `route-policy`、`filter-policy`、`import-route` | `policy-based-route`、`ip policy-based-route` |\n| 典型用途 | 选路优化、路由过滤、引入控制 | 双出口分流、源地址引流、安全牵引 |\n\n## 五、排错思路\n\n- 路由策略没生效：先看 `display route-policy` 的 node 匹配顺序，再看是不是漏配尾部的 `permit node`，最后确认调用点（import/export/import-route）是否真的指向了这个 policy。\n- PBR 没生效：`display policy-based-route` 看命中计数；确认 ACL 的 rule 是 permit 且被正确匹配（PBR 里 ACL 的 deny 通常表示“不匹配该规则，不执行该动作”，不同版本需实测）；确认 next-hop 是否在路由表可达；确认接口确实调用了 `ip policy-based-route`。\n- 常见现象：路由表里明明有一条更优路径，但流量偏偏走另一条——先怀疑 PBR；反过来，路由表里的属性是邻居没给的——先怀疑 route-policy 的 apply 生效在错误方向（import 还是 export）。",
   "cmds": [
     "display route-policy",
     "display ip routing-table",
-    "display traffic policy user-defined",
-    "display traffic-policy applied-record",
-    "display ip interface brief"
+    "display policy-based-route",
+    "display acl 3000",
+    "display traffic policy statistics interface GigabitEthernet0/0/1 inbound"
   ],
   "pits": [
-    "route-policy 末尾隐含 deny，忘记配 permit 节点会过滤掉所有路由。",
-    "PBR 重定向下一跳不可达时未联动 track，流量被丢弃。",
-    "filter-policy 对 OSPF 只过滤路由表，不影响 LSA 泛洪。",
-    "route-policy 中 if-match 多个条件是“与”关系，容易配错。",
-    "PBR 在接口入方向应用，方向配反不生效。"
+    "route-policy 末尾必须显式 permit，否则默认 deny 全部",
+    "node 编号从小到大匹配，先命中的立即跳出，注意顺序",
+    "PBR 指定下一跳不可达会造成黑洞，需做可达性检测",
+    "PBR 只改去程，回程不对称易触发 URPF 或防火墙丢包",
+    "OSPF 中 filter-policy import 只影响本地 RIB，不影响 LSA"
   ],
   "qa": [
     {
       "q": "路由策略和策略路由的本质区别是什么？",
-      "a": "路由策略操作路由条目，影响路由表，属控制平面；策略路由操作数据报文，直接指定转发路径，属转发平面。前者管路由生成/发布，后者管报文转发。"
+      "a": "作用对象不同：路由策略处理路由条目，工作在控制平面，通过改属性间接影响选路；策略路由处理数据报文，工作在转发平面，直接绕过 FIB 指定下一跳或出接口。"
     },
     {
-      "q": "route-policy 中多个 node 的匹配顺序和默认行为？",
-      "a": "按 node 编号从小到大匹配，命中一个 node 后执行其动作并停止。所有 node 都不匹配时，默认 deny（VRP）。"
+      "q": "route-policy 中各 node 都不匹配时会怎样？",
+      "a": "整个 route-policy 返回 deny。因此通常要在末尾配置一个空 match 的 permit node 作兜底，否则未被显式允许的路由会被丢弃。"
     },
     {
-      "q": "PBR 命中策略后还会查路由表吗？",
-      "a": "不会。PBR 优先于路由表，命中后直接按策略指定的下一跳或出接口转发，不再查路由表。"
+      "q": "PBR 为什么不建议大规模使用？",
+      "a": "配置状态化难维护、每包多一次 ACL 匹配影响性能、绕开路由表易导致回程不对称、下一跳失效不会自动收敛，需要额外做检测。"
     },
     {
-      "q": "filter-policy 和 route-policy 在 BGP 中的区别？",
-      "a": "filter-policy 只能过滤路由，不能修改属性；route-policy 既可过滤又可修改 BGP 属性（如 Local_Preference、MED、AS_Path）。"
+      "q": "filter-policy 和 route-policy 都能过滤路由，区别在哪？",
+      "a": "filter-policy 只能过滤前缀，不能修改属性；route-policy 既能过滤又能 set 属性，且可以多 node 组合逻辑，功能更强但配置更复杂。"
     }
   ],
-  "syllabus": "HCIP-Datacom 路由策略与策略路由"
+  "syllabus": "HCIP-Datacom 路由技术（路由策略与策略路由）"
 }

@@ -807,9 +807,18 @@ function mdToHtml(md) {
   t = t.replace(/^#{4,5}\s+(.+)$/gm, "<h4>$1</h4>");
   t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+  const isSep = (s) => /^\|[\s:\-|]+\|?$/.test(s.trim());
+  const cells = (s) => s.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((x) => x.trim());
   const blocks = t.split(/\n{2,}/).map((blk) => {
     const lines = blk.split("\n").filter((x) => x.trim());
     if (!lines.length) return "";
+    if (lines.length >= 2 && /^\|/.test(lines[0]) && isSep(lines[1])) {
+      const head = cells(lines[0]);
+      const rows = lines.slice(2).filter((x) => /^\|/.test(x)).map(cells);
+      let h = "<table><thead><tr>" + head.map((c) => "<th>" + c + "</th>").join("") + "</tr></thead><tbody>";
+      h += rows.map((r) => "<tr>" + r.map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
+      return h + "</tbody></table>";
+    }
     if (lines.every((x) => /^[-*]\s+/.test(x))) {
       return "<ul>" + lines.map((x) => "<li>" + x.replace(/^[-*]\s+/, "") + "</li>").join("") + "</ul>";
     }

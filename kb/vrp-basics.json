@@ -5,42 +5,49 @@
   "cat": "交换",
   "keys": [
     "VRP",
-    "命令行",
-    "配置管理",
-    "视图",
-    "命令视图",
-    "配置文件"
+    "Versatile Routing Platform",
+    "命令行视图",
+    "用户视图",
+    "系统视图",
+    "配置文件",
+    "current-configuration",
+    "saved-configuration",
+    "Committed 提交"
   ],
-  "one": "华为设备通用路由平台命令行操作与配置管理基础。",
-  "analogy": "VRP 命令行就像一台多功能料理机，不同视图是不同刀头：用户视图是插电待机，系统视图是换刀头，接口视图是调具体刀片。配置管理像菜谱本，记下每步操作，随时回滚或换菜谱。",
-  "body": "## 1. 为什么需要 VRP 命令行\n\n华为数据通信设备（路由器、交换机、防火墙）运行统一的 VRP（Versatile Routing Platform）操作系统。VRP 提供分层的命令行接口（CLI），让工程师通过文本命令完成配置、监控和故障排查。与图形界面相比，CLI 可脚本化、可远程、资源占用低，是网络设备运维的基石。\n\n## 2. 命令视图体系\n\nVRP 采用视图（View）隔离命令权限和上下文。每条命令只在特定视图下生效，避免误操作。\n\n| 视图 | 提示符 | 进入方式 | 主要功能 |\n|------|--------|----------|----------|\n| 用户视图 | `<Huawei>` | 登录后默认 | 查看状态、执行 ping/telnet 等测试命令 |\n| 系统视图 | `[Huawei]` | `system-view` | 全局配置，如接口、路由、安全策略 |\n| 接口视图 | `[Huawei-GigabitEthernet0/0/1]` | `interface GigabitEthernet0/0/1` | 配置具体接口参数 |\n| 协议视图 | `[Huawei-ospf-1]` | `ospf 1` | 配置路由协议 |\n| 用户界面视图 | `[Huawei-ui-vty0-4]` | `user-interface vty 0 4` | 配置远程登录方式 |\n\n- 使用 `quit` 返回上一级视图，`return` 或 `Ctrl+Z` 直接回到用户视图。\n- 视图提示符中的方括号表示系统视图及以上，尖括号表示用户视图。\n\n## 3. 命令语法与帮助\n\nVRP 命令遵循“命令字 + 关键字 + 参数”结构，支持：\n\n- **补全**：输入部分命令后按 `Tab` 键自动补全。\n- **帮助**：`?` 显示当前视图下所有命令或命令参数说明。\n- **简写**：命令可简写为不冲突的前缀，如 `sys` 代表 `system-view`。\n- **历史**：上下方向键调出历史命令。\n\n## 4. 配置管理机制\n\nVRP 的配置分为**运行配置**（current-configuration）和**保存配置**（saved-configuration）。\n\n- 运行配置：设备内存中当前生效的配置，掉电丢失。\n- 保存配置：通过 `save` 命令写入存储介质（如 flash 中的 `vrpcfg.zip`），重启后加载。\n\n配置文件管理命令：\n\n- `display current-configuration`：查看当前运行配置。\n- `display saved-configuration`：查看已保存配置。\n- `save`：保存当前配置到存储介质。\n- `reset saved-configuration`：清除已保存配置（需重启生效）。\n- `compare configuration`：比较当前配置与保存配置的差异。\n\n## 5. 配置回滚与试运行\n\nVRP 支持配置回滚（Configuration Rollback）和试运行（Configuration Trial），用于降低变更风险：\n\n- `configuration commit` 与 `configuration rollback`：在配置变更前生成回滚点，变更后若异常可回滚到指定回滚点。\n- `configuration trial`：试运行配置，不实际生效，用于验证命令正确性。\n\n## 6. 文件系统管理\n\nVRP 提供文件系统操作命令，如 `dir`、`cd`、`copy`、`delete`、`move`、`rename`，用于管理设备存储中的配置文件、系统软件和日志文件。\n\n## 7. 与相邻技术的分工\n\n- **SNMP/Netconf**：用于自动化监控和配置，CLI 仍是底层基础。\n- **AAA**：控制用户登录权限，不同级别用户可执行的命令视图不同。\n- **NTP**：保证日志时间戳准确，便于配置变更审计。\n\n## 8. 设计取舍\n\nVRP 命令行采用视图隔离和命令分级，牺牲了部分灵活性（如跨视图命令需切换），但换来了安全性和可读性。配置管理区分运行配置和保存配置，避免误操作导致配置丢失，但也要求工程师养成 `save` 的习惯。",
+  "one": "华为设备通用路由平台 VRP 的命令行操作与配置保存/回滚机制",
+  "analogy": "VRP 就像一个带保险柜的办公室。进门先在前台（用户视图）只能看不能改；要动文件得刷卡进办公区（系统视图），而且每改一处只是在草稿纸上写（candidate 配置），你不按\"提交\"键，正式文件一个字都不动；按了提交才归档进保险柜（current-configuration），再存一份到银行保险箱（saved-configuration 存 flash），断电重启才丢不了。写错了还能翻出昨天的存档（configuration replace 回滚）。",
+  "body": "## 为什么需要一套专门的命令行体系\n\n华为数通设备从盒式交换机到核心路由器共用一个操作系统 VRP（Versatile Routing Platform）。它要解决的核心问题不是\"怎么敲命令\"，而是三件事：**权限分层**、**配置的实时性与可回滚性**、**运行配置与持久配置的分离**。理解这三条，VRP 的命令行就不是死记硬背，而是有逻辑的。\n\n传统路由器把当前运行配置直接写到 NVRAM，改一条生效一条，改错就只能靠人脑回忆。VRP 的做法是把配置分成两份：内存里的 `current-configuration`（正在跑的）和 flash 里的 `saved-configuration`（重启后要加载的）。这两份可以不一致，用 `display saved-configuration` 对比就能看出\"我改了但忘了 save\"。这个设计牺牲了一点实时性（要人为 save），换来的是\"改坏了不 save，重启就回到上一个好状态\"的救命能力。\n\n## 视图分级：为什么命令要分上下文\n\nVRP 是**基于视图（view）的层级命令树**，不是平铺的。原因很实际：`interface` 这个词在系统视图下是进入接口，在接口视图下改 IP 又需要别的关键字，如果所有命令都在一个平面里，关键字冲突和误操作会无法收敛。分视图让同一级下可选命令集合变小，敲 Tab 补全才有意义。\n\n主要视图与提示符：\n\n| 视图 | 提示符 | 进入方式 | 典型操作 |\n|---|---|---|---|\n| 用户视图 | `<Huawei>` | 登录即进入 | 查看、测试、文件操作 |\n| 系统视图 | `[Huawei]` | `system-view` | 全局配置 |\n| 接口视图 | `[Huawei-GigabitEthernet0/0/1]` | `interface ge0/0/1` | 接口参数 |\n| 协议视图 | `[Huawei-ospf-1]` | `ospf 1` | 协议参数 |\n| 用户界面视图 | `[Huawei-ui-vty0-4]` | `user-interface vty 0 4` | 登录认证 |\n\n`quit` 退一级，`return`（或 Ctrl+Z）直接回用户视图，`Ctrl+U` 清行，`Tab` 补全。这些不是花架子——现场排错时敲 `display current-configuration | include ospf` 必须保证自己在用户视图下（用户视图也能执行 display，这是设计上的便利）。\n\n注意：**用户视图不是只能看**。`save`、`reset`、`ping`、`tftp`、`dir`、`startup system-software` 都在用户视图下执行。这些是\"影响整机但不进配置\"的操作，所以放在最低权限层。\n\n## 配置的两阶段提交：candidate 与 committed\n\n这是 VRP 与老式 IOS 最本质的区别，也是考试常考、现场最容易踩坑的地方。\n\n- 在系统视图/接口视图下敲的命令，先进 **candidate configuration**（候选配置），此时并未生效，`current-configuration` 里看不到。\n- 敲 `commit` 才把 candidate 合并进 **current-configuration**，真正下发给各业务模块。\n- `display candidate-configuration` 看未提交的改动；`return`/`quit` 出视图**不会**自动提交。\n\n为什么这么设计？因为一条业务配置常常涉及多模块联动（例如配 OSPF 要同时改路由表、接口状态机、定时器）。如果每条命令都立即生效，中间态可能被其他进程读到，产生短暂但真实的不一致。两阶段提交把一组改动作为一个事务落地，天然支持\"配错了整组丢弃\"（`reset candidate-configuration` 或退出不 commit）。\n\n现场最常见的故障：改完 IP 觉得通了，其实没 commit，`display current-configuration` 里根本没有这条，过一会儿重启/切主控全丢。**养成习惯：改完立刻 `display current-configuration interface ge0/0/1` 复核，或看提示符上有没有 `*` 标记（部分版本 candidate 未提交会带标记）**。\n\n> 部分老版本 VRP（如 VRP5 的部分盒式设备）默认关闭两阶段提交，命令回车即生效。判断方法：`display current-configuration` 能否立刻看到刚才那条。别把两种行为记混。\n\n## 配置文件的三层\n\n1. **candidate**：内存里待提交的草稿。\n2. **current-configuration**：内存里正在运行的配置，设备行为的唯一真相。重启丢失。\n3. **saved-configuration**：flash 中的 `.cfg` 或 `.zip`（VRP8 用 `vrpcfg.zip`），启动时由 BootROM/引导程序加载。\n\n三者关系用一条链说清：`commit` 让 candidate → current；`save` 让 current → saved；重启让 saved → current。**改配置不等于存配置，存配置不等于生效**——生效看 current，持久看 saved。\n\n`saved-configuration` 为空（新设备）时，设备以出厂默认配置启动，`display saved-configuration` 会提示无配置，此时 `save` 会把当前配置整体写入。\n\n## 配置的回滚与备份\n\nVRP 提供两条路：\n\n- **`configuration replace file <file>`**：用一份完整的配置文件整体替换 current，相当于\"恢复出厂/恢复基线\"。会先比对差异，提示确认。\n- **`configuration rollback` / 配置回滚点**：部分平台支持 `configuration checkpoint` 打快照，出问题一键回到快照点。\n\n另外 `save` 时可以指定文件名做多份备份，故障时用 `startup saved-configuration <file>` 指定下次启动加载哪份。这是变更窗口前的标准动作：先 `save backup.cfg`，改坏了 `startup saved-configuration backup.cfg` + `reboot`。\n\n## 与相邻机制的分工\n\n- **命令行 vs SNMP/NETCONF**：命令行是人机接口，NETCONF 是机机接口，两者操作的是同一份 current-configuration，所以 `display current-configuration` 永远能看到网管下发的配置。排错时不要怀疑\"网管配的为什么命令行看不到\"——除非网管改的是 candidate 且没 commit。\n- **current vs 启动配置**：主备倒换（双主控）时，备用主控同步的是 current-configuration，所以倒换后配置不丢；但断电重启加载的是 saved，两者不同步就会\"倒换没事、重启丢配置\"。\n- **`display this` vs `display current-configuration`**：`display this` 只看当前视图下的配置，排单接口问题用它更快；`display current-configuration` 是全量。全量在大型设备上可能几千行，必须配 `| include`、`| begin`、`| section` 过滤。\n\n## 过滤与输出控制\n\n`display` 后面接正则管道是 VRP 命令行效率的核心：\n\n- `| include ospf`：只留含 ospf 的行。\n- `| exclude`：反向过滤。\n- `| begin`：从匹配行开始到结尾。\n- `| section`：输出匹配的整段（含子命令），VRP5 起支持。\n\n大型现网设备上 `display current-configuration` 不要裸跑，既慢又刷屏。\n\n## 命令行的几个设计取舍\n\n- **补全只补到唯一关键字，不补参数值**：避免歧义，也避免把错误参数替你填好。\n- **`undo` 是显式反向命令而不是撤销栈**：`undo` 只撤销某一项配置，不按历史顺序回退，因为配置是集合不是序列。\n- **用户分级 0–15**：0 参观级、1 监控级、2 配置级、3–15 管理级。级别决定能进哪个视图、能敲哪些命令，与 AAA 结合做权限隔离。",
   "cmds": [
-    "display current-configuration",
+    "display current-configuration | include ospf",
     "display saved-configuration",
-    "display this",
+    "display candidate-configuration",
     "save",
-    "compare configuration"
+    "display this"
   ],
   "pits": [
-    "修改配置后未执行 save，重启后配置丢失。",
-    "在用户视图下执行配置命令会报错，需先 system-view。",
-    "使用 reset saved-configuration 后未重启，配置未真正清除。",
-    "命令简写冲突时需输入完整命令或使用 Tab 补全。",
-    "回滚点未提前创建，故障时无法快速恢复。"
+    "改完配置没 commit，current 里看不到，重启全丢",
+    "改了不 save，主备倒换没事但断电重启回旧配置",
+    "display current-configuration 裸跑刷屏，必须加管道过滤",
+    "用户视图能 save，别以为只有系统视图能存盘",
+    "configuration replace 是整体替换，会覆盖未备份的改动"
   ],
   "qa": [
     {
-      "q": "VRP 中用户视图和系统视图有什么区别？",
-      "a": "用户视图提示符为 <Huawei>，只能执行查看和测试命令；系统视图提示符为 [Huawei]，可进行全局配置。通过 system-view 进入系统视图。"
+      "q": "current-configuration 和 saved-configuration 有什么区别？",
+      "a": "current 在内存中，是设备正在运行的配置，重启丢失；saved 在 flash 中，重启时加载。commit 让候选进 current，save 让 current 进 saved，两者可不同步。"
     },
     {
-      "q": "如何查看当前配置与保存配置的差异？",
-      "a": "使用 compare configuration 命令，可显示当前运行配置与已保存配置的不同之处。"
+      "q": "为什么改完命令 display current-configuration 看不到？",
+      "a": "命令进了 candidate configuration 未提交。需执行 commit 才合并进 current。老版本 VRP 或关闭两阶段提交时回车即生效。"
     },
     {
-      "q": "配置回滚有什么作用？",
-      "a": "在变更前创建回滚点，若变更导致异常，可回滚到之前的状态，减少故障恢复时间。"
+      "q": "VRP 有哪些视图，提示符怎么区分？",
+      "a": "用户视图 <Huawei>，系统视图 [Huawei]，接口视图 [Huawei-GigabitEthernet0/0/1]，协议视图 [Huawei-ospf-1]。quit 退一级，return 回用户视图。"
+    },
+    {
+      "q": "如何快速定位当前配置里的某段配置？",
+      "a": "display current-configuration | include 关键字，或 | section 输出整段，| begin 从匹配行开始。display this 只看当前视图。"
     }
   ],
-  "syllabus": "HCIA-Datacom 3.1 VRP 基础"
+  "syllabus": "HCIA-Datacom 命令行基础与设备管理（VRP 基础操作、配置文件管理）"
 }

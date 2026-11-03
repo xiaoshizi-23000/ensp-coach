@@ -5,41 +5,53 @@
   "cat": "交换",
   "keys": [
     "MSTP",
+    "Multiple Spanning Tree Protocol",
     "多生成树",
-    "实例映射",
     "MSTI",
+    "实例映射",
+    "IST",
     "CIST",
-    "MST域"
+    "MST Region",
+    "802.1s"
   ],
-  "one": "MSTP 通过多实例映射不同 VLAN，实现负载分担与快速收敛。",
-  "analogy": "就像一条多车道的高速公路，每个车道（实例）可以独立决定哪条路通车、哪条路封闭，而不是所有车都挤一条道。这样不同方向的车流（VLAN）可以走不同的路径，互不干扰，还能互相备份。",
-  "body": "## 为什么需要 MSTP\n\nSTP/RSTP 在整网只维护一棵生成树，所有 VLAN 共享同一拓扑，导致部分链路被阻塞、带宽浪费，且无法按 VLAN 做负载分担。MSTP（Multiple Spanning Tree Protocol，IEEE 802.1s）把多个 VLAN 映射到不同的生成树实例（MSTI），每个实例独立计算拓扑，从而实现：\n\n- **负载分担**：不同 VLAN 走不同路径，阻塞端口分散。\n- **快速收敛**：继承 RSTP 的快速收敛机制（P/A 机制、边缘端口等）。\n- **兼容性**：能兼容 STP/RSTP，通过 MSTP 的 CIST 与外部树交互。\n\n## 核心概念\n\n### MST 域（MST Region）\n\nMST 域是一组交换机逻辑上的集合，域内所有设备必须配置相同的：\n\n- 域名（Region Name）\n- 修订级别（Revision Level）\n- VLAN 到实例的映射关系（VLAN Mapping）\n\n只有三者完全一致，设备才属于同一个 MST 域。域内运行 MSTP，域间通过 CIST 交互。\n\n### 实例（Instance）与 MSTI\n\n- **CIST（Common and Internal Spanning Tree）**：域内和域间共同计算的单生成树，实例 ID 为 0。\n- **MSTI（Multiple Spanning Tree Instance）**：实例 ID 1~4094，每个实例独立计算生成树。\n- **CST（Common Spanning Tree）**：域间通过 CIST 根桥连接形成的树，每个域视为一个逻辑节点。\n\nVLAN 映射到实例后，该 VLAN 的流量沿对应实例的生成树转发。未映射的 VLAN 默认映射到实例 0（CIST）。\n\n### 端口角色与状态\n\nMSTP 端口角色继承 RSTP：根端口（Root Port）、指定端口（Designated Port）、替代端口（Alternate Port）、备份端口（Backup Port）、边缘端口（Edge Port）。状态只有 Discarding、Learning、Forwarding 三种。\n\n## 协议机制详解\n\n### BPDU 格式与字段\n\nMSTP 使用 MST BPDU，格式基于 RSTP BPDU 扩展。关键字段：\n\n- **Protocol Version Identifier**：3 表示 MSTP。\n- **BPDU Type**：0x02 表示 RSTP/MSTP。\n- **Flags**：包含 TC、Proposal、Agreement 等标志。\n- **Root Identifier**：CIST 根桥 ID。\n- **Root Path Cost**：到 CIST 根桥的路径开销。\n- **Bridge Identifier**：发送桥 ID。\n- **Port Identifier**：发送端口 ID。\n- **Message Age / Max Age / Hello Time / Forward Delay**：同 RSTP。\n- **Version 1 Length**：固定 0，表示后面是 MSTP 扩展。\n- **MSTP 扩展字段**：\n  - **MST Configuration Identifier**：包含格式选择符、域名、修订级别、配置摘要（Configuration Digest）。配置摘要由 VLAN 映射表通过 HMAC-MD5 计算得出，用于快速校验域配置是否一致。\n  - **CIST Internal Root Path Cost**：到 CIST 域内根桥的开销。\n  - **CIST Bridge Identifier**：域内 CIST 桥 ID。\n  - **CIST Remaining Hops**：剩余跳数，用于快速收敛。\n  - **MSTI Configuration Messages**：每个 MSTI 的配置信息，包括 MSTI 标志、MSTI 根桥 ID、MSTI 内部路径开销、MSTI 桥 ID、MSTI 剩余跳数。\n\n### 拓扑计算过程\n\nMSTP 的拓扑计算分为三步：\n\n1. **CIST 计算**：\n   - 每个域选举一个 CIST 域根（CIST Regional Root），域内到域根开销最小的桥成为域根。\n   - 域间通过比较 CIST 根桥 ID、外部路径开销等选举总根（CIST Root）。\n   - 域内所有设备计算到 CIST 域根的最短路径，形成 CIST。\n\n2. **MSTI 计算**：\n   - 每个 MSTI 独立选举根桥（MSTI Root），比较优先级、MAC、路径开销。\n   - 每个 MSTI 计算自己的生成树，端口角色独立确定。\n   - MSTI 的根桥必须位于同一个 MST 域内（因为 MSTI 信息只在域内传播）。\n\n3. **端口角色确定**：\n   - 对于 CIST，端口角色由 CIST 计算决定。\n   - 对于 MSTI，端口角色由 MSTI 计算决定，但需与 CIST 协调（例如，CIST 的根端口在 MSTI 中可能是指定端口）。\n\n### 快速收敛机制\n\nMSTP 继承 RSTP 的快速收敛特性：\n\n- **P/A 机制（Proposal/Agreement）**：在点到点链路上，上游端口发送 Proposal 置位的 BPDU，下游端口同意后立即进入 Forwarding，无需等待计时器。\n- **边缘端口**：直接连接终端的端口可配置为边缘端口，链路 up 后立即转发，不参与生成树计算。\n- **根端口快速切换**：当根端口失效，替代端口可快速成为新根端口（需满足同步条件）。\n\n### 与相邻技术的分工\n\n- **STP/RSTP**：单生成树，所有 VLAN 共享拓扑。MSTP 通过多实例实现负载分担。\n- **VRRP**：MSTP 负责二层防环与负载分担，VRRP 负责三层网关冗余，两者常配合使用（如 MSTP 实例 1 的根桥与 VRRP 主网关在同一设备）。\n- **Smart Link**：用于双上行组网，替代 STP 的阻塞机制，收敛更快，但 MSTP 更通用。\n\n## 设计取舍\n\n- **实例数量**：实例越多，计算和资源消耗越大。通常根据 VLAN 分组规划，2~4 个实例即可满足负载分担。\n- **域划分**：域内配置必须严格一致，否则设备会分裂到不同域，导致 CIST 计算异常。建议统一规划域名、修订级别和映射。\n- **根桥规划**：CIST 根桥和 MSTI 根桥应分布在不同设备上，实现负载分担。通常将不同实例的根桥优先级设为不同值。\n- **兼容性**：MSTP 域与非 MSTP 设备互连时，通过 CIST 交互，但非 MSTP 设备不识别 MSTI，可能导致部分 VLAN 流量路径不优。",
+  "one": "把 VLAN 映射到多个独立生成树实例，实现按 VLAN 负载分担与快速收敛",
+  "analogy": "STP 像全公司只有一条消防通道，不管哪个部门着火都走同一条路，另一条路永远空着。MSTP 则像给每个部门各画一张疏散图：财务走东楼梯、研发走西楼梯，各走各的、互不干扰，但所有图都画在同一栋楼的结构上，物业只需要维护一套楼体模型。所以它既做到了分流转发，又不用为每个 VLAN 单独养一棵树、把交换机 CPU 累死。",
+  "body": "# 为什么需要 MSTP\n\n## 从 STP/RSTP 的局限说起\n\nSTP/RSTP 的一个根本问题是：**整网只有一棵树**。所有 VLAN 共用同一套阻塞端口，被阻塞的链路带宽完全浪费；同时无法按 VLAN 做流量分担——你不可能让 VLAN 10 走左边、VLAN 20 走右边，因为生成树只有一棵。\n\nPVST/PVST+ 试图解决这个问题：每个 VLAN 跑一棵独立的树。代价是**每 VLAN 一个实例**，1000 个 VLAN 就是 1000 棵树的 BPDU、1000 次拓扑计算，接入层交换机的 CPU 和 TC 泛洪压力都受不了。而且 PVST+ 是 Cisco 私有。\n\nMSTP（IEEE 802.1s，后并入 802.1Q-2005）的取舍是：**不按 VLAN 建树，按“实例”建树，再把 VLAN 映射到实例上**。多个 VLAN 可以共用一个实例，一台交换机上通常只跑 2~16 个实例，既能负载分担，又把计算量压到可接受范围。\n\n# 核心概念与层次结构\n\nMSTP 的概念是分层的，理解顺序很重要：Region → IST/CIST → MSTI → VLAN 映射。\n\n## MST Region（MST 域）\n\nRegion 是一组配置完全一致的交换机集合，只有配置一致它们才认为彼此“在同一个域内”，才会做真正的多实例计算。\n\n判断是否同域，看三个参数，**必须完全一致**：\n\n| 参数 | 说明 |\n|---|---|\n| Region Name | 域名字符串，默认是交换机 MAC 或空 |\n| Revision Level | 修订级别，0~65535，默认 0 |\n| VLAN-to-Instance 映射表 | 哪些 VLAN 映射到哪个 MSTI |\n\n> 注意：摘要（Configuration Digest）由映射表经 MD5/HMAC-MD5 计算得出，携带在 BPDU 里，用于快速比对映射表是否一致。三个参数任一不同，就是不同 Region。\n\n跨 Region 的链路不再是“域内链路”，而是把每个 Region 整体看成一个大交换机——Region 内部的一切对外部透明，只暴露一个逻辑实体。\n\n## IST、CST、CIST\n\n- **IST（Internal Spanning Tree）**：每个 Region 内部实例 0，是域内所有 VLAN 默认所属的实例，负责在域内连通。\n- **CST（Common Spanning Tree）**：把每个 Region 压缩成一个逻辑交换机后，Region 之间跑的那棵“公共树”，相当于 RSTP 在域间的延续。\n- **CIST（Common and Internal Spanning Tree）**：IST + CST 合起来，即全网唯一的一棵总树，实例 0 就是 CIST。它保证全网无环、单一连通。\n- **CIST Root**：全网 CIST 的根桥，在全部 Region 的所有交换机中比较优先级和 MAC 选出。\n- **CIST Regional Root**：Region 内到 CIST Root 路径开销最小的那台，是该 Region 的对外出口（也是 IST Root）。\n\n这种“域内一套、域外一套、拼起来是一个整体”的设计，本质是为了**兼容与扩展**：外部设备只看到 RSTP 行为，不需要理解多实例；域内则享受多实例分流。\n\n## MSTI（Multiple Spanning Tree Instance）\n\nMSTI 是域内的多实例，编号 1~64（VRP 上可配 1~4094，实际受限于设备规格，常见支持 16 或 64 个）。\n\n- **实例 0 = CIST**，永远存在，不能删除，未映射的 VLAN 默认属于实例 0。\n- 实例 1~n 各自独立计算拓扑，各自有根桥、各自的阻塞端口。\n- **同一个端口在不同 MSTI 中的角色和状态可以不同**——这正是负载分担的实现基础：端口 GE0/0/1 在 MSTI 1 是 Root Port 转发，在 MSTI 2 可以是 Alternate Port 阻塞。\n\n## VLAN 映射\n\n映射规则要点：\n\n1. 一个 VLAN 只能映射到一个实例（一对一）。\n2. 一个实例可以承载多个 VLAN（多对一）。\n3. 未显式映射的 VLAN 全部落在实例 0。\n4. 映射表变化会导致 Region 摘要变化，进而改变域边界，**可能引发整网重收敛**，所以要在规划阶段定死，不要上线后随意改。\n\n典型规划：VLAN 10、20 映射到 MSTI 1，VLAN 30、40 映射到 MSTI 2；核心 A 做 MSTI 1 的根、核心 B 做 MSTI 2 的根，两条上行链路就各承载一部分 VLAN 的流量。\n\n# 协议机制详解\n\n## BPDU 格式\n\nMSTP 的 BPDU 是 **MST BPDU**，格式上基于 RSTP BPDU 扩展，版本号字段为 3，类型为 0x02。结构：\n\n1. **基本字段**（与 RSTP 相同的 36 字节部分）：Protocol ID、Version、BPDU Type、Flags、Root ID、Root Path Cost、Bridge ID、Port ID、Message Age、Max Age、Hello Time、Forward Delay。这部分保证 MSTP 对 RSTP/STP 的后向兼容。\n2. **Version 3 Length**：标识后面 MST 扩展部分的长度。\n3. **MST 扩展字段**：\n   - **Version 1 Length**（置 0，表示后面没有 802.1D 的老式扩展）\n   - **Configuration Identifier**：Format Selector + Configuration Name（32 字节）+ Revision Level（2 字节）+ Configuration Digest（16 字节 HMAC-MD5）\n   - **CIST Internal Root Path Cost**：到 CIST Regional Root 的域内开销\n   - **CIST Bridge ID**：本 Region 的 CIST Regional Root 的桥 ID（对外表现为一个逻辑桥）\n   - **CIST Port ID**：域内出口端口标识\n   - **MSTI Configuration Messages**：每个 MSTI 一段，包含 MSTI Flags、MSTI Regional Root Identifier、MSTI Internal Root Path Cost、MSTI Bridge Priority、MSTI Port Priority、Remaining Hops。\n\n**Remaining Hops 是 MSTP 特有的**：它取代了 Message Age 在域内的作用，每经过一台交换机减 1，初值由 `stp max-hops` 配置（默认 20），减到 0 报文被丢弃。这样避免了域内因为 Message Age 累积误差导致的拓扑老化问题。\n\n## 端口角色与状态\n\nMSTP 继承了 RSTP 的角色体系并扩展：\n\n| 角色 | 说明 |\n|---|---|\n| Root Port | 到本实例根桥开销最小的端口 |\n| Designated Port | 下游网段的指定转发端口 |\n| Alternate Port | 根端口的备份，收到其他桥的更优 BPDU |\n| Backup Port | 指定端口的备份（同一台桥的两个口接到同一共享网段） |\n| Master Port | **MSTP 特有**：域内到 CIST Root 的出口端口，是 IST 上的根端口 |\n| Boundary Port | 连接其他 Region 或运行 STP/RSTP 设备的端口 |\n\n状态只有三种：**Discarding / Learning / Forwarding**，与 RSTP 一致，没有 STP 的 Blocking/Listening。\n\n**关键点**：一个端口在实例 0（CIST/IST）中可能是 Master Port 转发，在 MSTI 2 中可能是 Discarding。端口转发状态是**按实例独立维护**的，这就是“一个口同时是 A 实例的根端口、B 实例的阻塞端口”的实现方式。\n\n## 拓扑计算过程\n\nMSTP 的计算是分两阶段、且实例间有依赖关系的：\n\n**第一阶段：CIST（实例 0）计算**\n\n1. 每台交换机在域内交互 MST BPDU，比较 CIST Root ID、CIST External Root Path Cost、CIST Regional Root ID 等。\n2. 先选出全网 CIST Root，再在每个 Region 内选出到 CIST Root 最近的交换机作为 CIST Regional Root。\n3. 各 Region 把 CIST Regional Root 的桥 ID 和域内开销“冒充”成自己的对外形象，域间设备只看到这个逻辑桥。\n4. 结果：域内形成 IST，域间形成 CST，合并即 CIST，全网无环。\n\n**第二阶段：各 MSTI 计算**\n\n1. 每个 MSTI 有独立的 Regional Root，独立比较 MSTI Root ID、MSTI Internal Root Path Cost、MSTI Bridge Priority、MSTI Port Priority（注意顺序，与 CIST 的向量比较项不同）。\n2. MSTI 的根必须在本 Region 内（不能跨域），这也是为什么多实例分流效果只在域内有效——**跨 Region 的流量只能走 CIST 树**，这是 MSTP 的一个设计局限。\n3. 每个 MSTI 独立选根端口、指定端口，独立阻塞。\n\n**同步机制**：MSTP 规定，如果某端口在 CIST 中是 Discarding，那么它在所有 MSTI 中也必须是 Discarding（CIST 阻塞则全阻塞），避免域间环路。反之，CIST 转发的端口在某个 MSTI 中可以是阻塞的。这个“向下同步”保证了全网唯一连通性不被多实例破坏。\n\n## 与相邻技术的分工\n\n- **STP**：单树，收敛慢（30~50s），已淘汰。\n- **RSTP**：单树，快速收敛（P/A 机制、边缘端口），适合单一 VLAN 或不需要分流的场景。\n- **MSTP**：多实例 + 快速收敛，是园区网主流；跨厂商兼容性好（标准协议）。\n- **VBST**：华为私有，每 VLAN 一棵树，配置简单但规模大时资源消耗高，适合 VLAN 数量少的场景。\n- **Smart Link / Monitor Link**：双上行接入的替代方案，不做生成树计算，靠主备端口切换，收敛更快但只适合简单双上行拓扑。\n- **堆叠（iStack/CSS）+ Eth-Trunk**：从根上消除二层环，是现代园区网的首选；MSTP 更多保留为兜底防环手段。\n\n**取舍总结**：MSTP 用“实例”而非“VLAN”作为建树粒度，牺牲了“每 VLAN 独立路径”的极致灵活性，换来了可扩展性；用 Region 概念牺牲了跨域分流能力，换来了与 RSTP 的兼容和域内配置的稳定性。\n\n# 典型配置思路\n\n1. 全网统一 Region Name、Revision、映射表。\n2. 核心层两台交换机分别作为 MSTI 1 和 MSTI 2 的根（`stp instance 1 root primary` / `stp instance 2 root secondary` 互为备份）。\n3. 接入层交换机优先级放低，确保不会抢占根。\n4. 接入端口配 `stp edged-port enable`，并配合 BPDU 保护（`stp bpdu-protection`）。\n5. 上行端口开 `stp root-protection`，防止接入设备被错误配置成根。\n\n# 常见设计注意点\n\n- **实例数量**：受设备规格限制（不同型号 16/64/256 不等），规划时要查规格表。\n- **映射粒度**：一般按业务部门/网段映射，不要一个 VLAN 一个实例。\n- **跨域不分流**：跨 Region 只有 CIST 一棵树，边界链路上多实例分流无法生效。\n- **TC 泛洪**：MSTP 的 TC 会影响所有实例的 MAC 表项，实例多时要注意 TC 抑制。",
   "cmds": [
     "display stp region-configuration",
-    "display stp instance 1",
-    "display stp brief",
-    "display stp interface GigabitEthernet0/0/1"
+    "display stp instance 1 brief",
+    "display stp interface GigabitEthernet0/0/1 verbose",
+    "display vlan",
+    "display stp topology-change"
   ],
   "pits": [
-    "域内域名、修订级别、VLAN 映射必须完全一致，否则分裂成不同域。",
-    "实例 0 为 CIST，不能直接映射 VLAN，VLAN 默认映射到实例 0。",
-    "MSTI 根桥必须在同一 MST 域内，跨域无法形成 MSTI。",
-    "边缘端口建议手动配置，避免误接交换机导致环路。",
-    "修改映射后需提交（active region-configuration）才生效。"
+    "Region Name/Revision/映射表三者必须全网一致，否则被切成多个域",
+    "映射表改动会触发摘要变化导致整网重收敛，规划阶段定死",
+    "实例0（CIST）阻塞的端口，所有实例必然阻塞，别指望它分流",
+    "跨 Region 链路只有 CIST 一棵树，无法实现多实例负载分担",
+    "接入端口务必配 edged-port + BPDU 保护，否则接错设备引发震荡"
   ],
   "qa": [
     {
-      "q": "MSTP 中 CIST 和 MSTI 的区别是什么？",
-      "a": "CIST 是域内和域间共同计算的单生成树（实例 0），负责域间拓扑；MSTI 是域内独立计算的实例（1~4094），用于 VLAN 负载分担。MSTI 根桥必须在域内。"
+      "q": "MSTP 如何实现 VLAN 间负载分担？",
+      "a": "把 VLAN 映射到不同 MSTI，不同 MSTI 选不同根桥，使不同实例在同一物理链路上角色不同：某端口在 MSTI1 为根端口转发、在 MSTI2 为 Alternate 阻塞，从而分流。"
     },
     {
-      "q": "MSTP 如何实现负载分担？",
-      "a": "将不同 VLAN 映射到不同 MSTI，每个 MSTI 独立计算生成树，通过设置不同实例的根桥优先级，使不同实例的阻塞端口分布在不同的链路上，从而让不同 VLAN 流量走不同路径。"
+      "q": "IST、CST、CIST 有什么区别？",
+      "a": "IST 是 Region 内部的实例 0；CST 是把每个 Region 看成一台逻辑交换机后域间的公共树；CIST 是 IST+CST 的全网唯一总树，即实例 0。"
     },
     {
-      "q": "MSTP 域内配置不一致会有什么后果？",
-      "a": "设备会认为不属于同一域，分裂成多个域，CIST 计算将每个域视为一个逻辑节点，可能导致次优路径或环路。需保证域名、修订级别、VLAN 映射完全一致。"
+      "q": "MSTP 中 Remaining Hops 的作用是什么？",
+      "a": "取代 Message Age 在域内的作用，每跳减 1，初值由 stp max-hops 配置（默认 20），减到 0 丢弃 BPDU，避免域内跳数无界和老化误差。"
+    },
+    {
+      "q": "MSTP 和 RSTP 的主要区别？",
+      "a": "MSTP 支持多实例，VLAN 映射到 MSTI 独立计算，可负载分担；RSTP 只有单树。两者都具备 P/A 快速收敛机制，MSTP 向后兼容 RSTP/STP。"
+    },
+    {
+      "q": "为什么 MSTP 跨域不能做多实例分流？",
+      "a": "因为 MSTI 的根必须在 Region 内部，域间只通过 CIST 这棵公共树连通；Region 对外表现为一个逻辑桥，内部多实例对外透明。"
     }
   ],
-  "syllabus": "HCIP-Datacom 交换技术"
+  "syllabus": "HCIP-Datacom 交换技术（园区网络二层可靠性：MSTP 多生成树与实例映射）"
 }

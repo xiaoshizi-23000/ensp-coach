@@ -8,38 +8,44 @@
     "CAPWAP",
     "AC",
     "AP",
+    "Fit AP",
     "无线接入点",
-    "隧道"
+    "Control and Provisioning of Wireless Access Points"
   ],
-  "one": "WLAN 组网通过 CAPWAP 隧道集中管理 AP，实现无线接入。",
-  "analogy": "就像一个大公司，总部（AC）统一管理各个分部（AP）。分部员工（无线终端）要访问公司资源，先通过专用通道（CAPWAP 隧道）把请求送到总部，总部再统一处理。这样总部能集中控制，分部不用自己搞一套复杂系统。",
-  "body": "## 为什么需要 CAPWAP\n\n传统 WLAN 中，AP 是胖 AP（FAT AP），每个 AP 独立配置、独立管理，当 AP 数量多时，配置、安全策略、漫游等难以统一。为此，出现了瘦 AP（FIT AP）架构，由 AC（Access Controller）集中管理多个 AP。AC 与 AP 之间需要一种控制协议，CAPWAP（Control And Provisioning of Wireless Access Points）应运而生。\n\nCAPWAP 是一个通用隧道协议，基于 UDP，定义了两类报文：控制报文（CAPWAP Control）和数据报文（CAPWAP Data）。控制报文用于 AC 对 AP 的配置下发、状态维护；数据报文用于封装无线用户的数据帧，在 AC 与 AP 之间传输。\n\n## CAPWAP 协议栈与报文格式\n\nCAPWAP 报文封装在 UDP 之上，控制报文使用 UDP 端口 5246，数据报文使用 UDP 端口 5247。CAPWAP 报文头包括：\n\n- **Version**：版本号，当前为 0。\n- **Type**：报文类型，控制报文为 0，数据报文为 1。\n- **Flags**：标志位，如 T 位表示隧道报文。\n- **Fragment ID**：分片标识。\n- **Length**：报文长度。\n- **Sequence Number**：序列号。\n- **Payload**：载荷，控制报文包含 CAPWAP 控制消息，数据报文包含无线数据帧。\n\n控制消息进一步分为多种类型，如 Discovery Request/Response、Join Request/Response、Configuration Status Request/Response、Change State Event Request 等。\n\n## AP 上线流程\n\nAP 上电后，需要经过以下阶段才能与 AC 建立隧道：\n\n1. **AP 发现阶段**：AP 通过 DHCP 获取 IP 地址，并获取 AC 的 IP 地址（通过 DHCP Option 43、DNS 或静态配置）。然后 AP 发送 Discovery Request 报文（广播或单播）寻找 AC，AC 回复 Discovery Response。\n2. **CAPWAP 隧道建立阶段**：AP 选择 AC 后，发送 Join Request，AC 回复 Join Response，双方建立控制隧道。\n3. **配置同步阶段**：AC 通过 Configuration Status Request 下发配置给 AP，AP 回复 Configuration Status Response。\n4. **数据隧道建立阶段**：AP 发送 Change State Event Request 通知 AC 进入运行状态，AC 回复 Change State Event Response。此时数据隧道也建立完成。\n\n## 数据转发模式\n\nCAPWAP 支持两种数据转发模式：\n\n- **隧道转发（Tunnel Mode）**：用户数据封装在 CAPWAP 数据报文中，通过 AC 转发。优点是安全策略集中、漫游切换快；缺点是 AC 成为流量瓶颈。\n- **直接转发（Direct Forward）**：用户数据不经过 AC，AP 直接将数据转发到上层网络。优点是减轻 AC 负担；缺点是安全策略需在 AP 或上层设备部署。\n\n## 与相邻技术的分工\n\n- **CAPWAP 与 DHCP**：DHCP 用于 AP 获取 IP 地址和 AC 地址（Option 43），是 AP 发现 AC 的前提。\n- **CAPWAP 与 802.11**：802.11 是无线空口协议，负责终端与 AP 之间的通信；CAPWAP 是 AP 与 AC 之间的隧道协议，两者协同工作。\n- **CAPWAP 与 VXLAN**：VXLAN 用于数据中心大二层，CAPWAP 专用于 WLAN 管理，二者领域不同。\n\n## 设计取舍\n\nCAPWAP 选择 UDP 而非 TCP，是为了降低协议开销，提高实时性；但 UDP 不保证可靠性，因此 CAPWAP 自身通过序列号、重传机制（控制报文）来保证可靠性。隧道转发模式集中管理但可能成为性能瓶颈，直接转发模式性能好但管理分散，实际部署需根据规模选择。",
+  "one": "AC 通过 CAPWAP 隧道集中管理 Fit AP 并转发无线业务报文",
+  "analogy": "把 AC 想成连锁店总部，AP 就是各地门店。门店不自己定规矩，招牌、菜单、定价、员工培训全由总部统一下发，这样开一百家店也不会走样。CAPWAP 就是总部和门店之间的专线电话加物流通道：一条线专门传指令和报表（控制隧道），另一条线专门送货（数据隧道）。门店只要通电、能打通总部电话，就能开张营业。",
+  "body": "# WLAN 组网与 CAPWAP 隧道\n\n## 为什么需要 CAPWAP\n\n早期 WLAN 用的是 Fat AP：每个 AP 自己存配置、自己做认证、自己管射频，几十个 AP 就是几十个独立小盒子，改一次 SSID 或密码要挨个登上去改，射频规划、漫游、用户权限全都没法统一。企业规模一上来这套就崩了。\n\n于是拆成两层架构：**AC（Access Controller）负责集中管控**，**Fit AP 只做射频收发和简单转发**。拆分之后立刻出现一个新问题——AC 和 AP 之间跑在 IP 网络上，中间隔着交换机、路由器甚至广域网，AP 怎么找到 AC？配置怎么下发？用户报文怎么送到 AC？这就需要一个标准协议把控制面和数据面都封起来。IETF 的 CAPWAP（RFC 5415/5416）就是干这个的，华为的实现基本遵循该框架并扩展了私有字段。\n\n关键设计取舍是**控制与数据分离**：控制隧道跑管理报文（配置下发、AP 状态上报、射频管理），数据隧道跑用户业务报文。分开的好处是两条隧道可以分别优化——控制流量小但对时延和可靠性敏感，数据流量大且可以按需选择是否经过 AC（直接转发时可完全不进隧道）。\n\n## 组网架构与转发模式\n\n### 三层组网 vs 二层组网\n\n| 对比项 | 二层组网 | 三层组网 |\n|---|---|---|\n| AC 与 AP 位置 | 同一广播域 | 可跨三层，AP 与 AC 不同网段 |\n| AP 发现 AC | 二层广播 + 三层单播都能用 | 主要靠 DHCP Option 43、DNS、静态配置 |\n| 典型场景 | 小型园区 | 大型园区、跨楼宇、总部-分支 |\n\n现网主流是三层组网，因为 AP 数量大、分布散，不可能全塞进一个 VLAN。\n\n### 转发模式（华为叫法）\n\n- **隧道转发（集中转发）**：用户数据报文封装进 CAPWAP 数据隧道，统一送到 AC 再出口。优点是安全策略、QoS、漫游全部集中在 AC，AP 侧零配置；缺点是 AC 成为流量瓶颈，时延增加一跳。\n- **直接转发（本地转发）**：CAPWAP 控制隧道照常建立，但用户数据在 AP 本地打上 VLAN tag 直接进接入交换机，不经过 AC。AC 只下发策略。优点是转发路径短、AC 压力小；缺点是业务 VLAN 必须延伸到 AP 接入端口，策略分散，漫游跨三层时体验差。\n- **软 GRE 等扩展方式**：在直接转发基础上对特定流量（如访客）再引回 AC。\n\n选型口诀：**小规模、强管控、要漫游一致 → 隧道转发；大流量、AP 分散、AC 性能吃紧 → 直接转发**。\n\n## CAPWAP 协议栈与报文格式\n\nCAPWAP 本身是一个 UDP 承载的协议：\n\n- **控制隧道**：UDP 端口 **5246**，承载 CAPWAP Control 报文，负责 Discovery、Join、Configuration 等状态机流程。\n- **数据隧道**：UDP 端口 **5247**，承载 CAPWAP Data 报文，内部封装完整的 802.11 帧或 802.3 帧。\n\n### 封装层次\n\n控制报文：`Ethernet | IP | UDP(5246) | CAPWAP Header | CAPWAP Control Header | Message Element...`\n\n数据报文：`Ethernet | IP | UDP(5247) | CAPWAP Header | 802.11/802.3 帧`\n\n### CAPWAP Header 关键字段\n\n- **Version**：协议版本号。\n- **Type**：置 0 表示数据报文，置 1 表示控制报文（同一 Header 格式复用于两类隧道）。\n- **T bit（Tunnel Header）**：指示后面是否还有原生帧头。直接转发相关处理会用到。\n- **F bit（Fragment）**：分片标志。CAPWAP 有 MTU 问题，超过隧道 MTU 的报文需要分片，Header 里的 `WBID`（Wireless Binding ID）用于重组。\n- **W bit（WBID）**：无线绑定标识，标识该报文属于哪个无线绑定/业务。\n- **RID / KID**：Radio ID 与 802.11 帧的 Key ID，用于射频和加密上下文标识。\n- **Payload Type**：载荷类型，区分 802.11、802.3、管理帧等。\n\n### 控制报文的 Message Element\n\nCAPWAP 控制消息由若干 **Message Element（TLV 结构）** 组成，Type 字段标识元素类型，如 AC 名称、AC IPv4 地址、WTP 板卡信息、射频信息、AP 的 Image 版本等。这种 TLV 扩展方式让厂商可以加私有元素而不破坏互通性。\n\n## 状态机：AP 是怎么上线的\n\nAP 上电后依次经历以下阶段，这是排错时最关键的主线。\n\n1. **上电与 Image 加载**：AP 从 Flash 加载 Fit 模式固件，起 802.11 射频但暂不提供服务。\n2. **Discovery（发现）阶段**：AP 通过四种方式找 AC——\n   - 静态配置（`ap-address`）\n   - DHCP 服务器的 **Option 43**（华为常用十六进制子选项格式，携带 AC 的 IP 列表）\n   - DNS 解析 `Huawei.WLAN.AC` 一类的域名\n   - 二层广播 / 三层广播（同网段时）\n   拿到候选 AC 列表后逐一发送 **Discovery Request**，AC 回 **Discovery Response**，内容含 AC 的优先级、负载、支持的 WTP 型号等，AP 据此选一个最优 AC。\n3. **Join（加入）阶段**：AP 向选定 AC 发 **Join Request**（携带 WTP 板卡型号、MAC、软件版本、射频数量等），AC 校验白名单/认证信息后回 **Join Response**。若 AP 版本与 AC 要求的版本不一致，AC 会在 Join Response 中指示 AP 下载新 Image，AP 进入 **Image Data** 状态通过数据隧道下载固件并重启，这叫 **自动升级**，是大规模部署的必备能力。\n4. **Configure（配置）阶段**：AC 通过 **Configuration Status Request** 下发配置（AC 名称、AP 名称、射频参数、SSID 与安全模板的引用等），AP 回 **Configuration Status Response**。之后进入 **Run** 状态。\n5. **Data Check / Run 状态**：建立数据隧道，AP 开始正常收发业务。运行中通过 **Echo Request/Response**（类似心跳）保活，AC 侧有超时定时器，超时则拆除隧道让 AP 重新走 Discovery。\n\n所以现场看 AP 是否上线，本质上就是看它卡在 **Discovery、Join、Image Data、Configure、Run** 哪个状态。\n\n## DTLS 与安全\n\nCAPWAP 定义了可选的 **DTLS** 加密：控制隧道默认可用 DTLS 保护（华为设备上可配置强制），数据隧道 DTLS 增加开销较大，通常按需开启。注意区分两件事：\n\n- **CAPWAP 隧道本身的 DTLS**：保护 AC-AP 之间的管理通道，防止配置被窃听篡改。\n- **无线空口的加密**：WPA2/WPA3、802.11i，保护 STA 到 AP 的链路。\n\n两者互不替代。\n\n## 与相邻技术的分工\n\n- **CAPWAP vs 传统二层漫游**：CAPWAP 让 AC 掌握全部 AP 的状态和密钥，STA 在 AP 间移动时由 AC 协调密钥与上下文迁移，这是集中架构带来的核心红利。\n- **CAPWAP vs GRE/IPsec**：CAPWAP 是 AC-AP 的专用协议，不是通用隧道，不能用来承载任意业务；跨广域网部署分支 AP 时，常在 CAPWAP 外层再套 IPsec 走 Internet。\n- **CAPWAP vs SNMP/网管**：CAPWAP 是运行态管控协议，网管是运维面，别把 AP 上线失败当成网管问题去查。\n\n## 设计上的取舍\n\n1. **集中在 AC 还是分布到 AP**：集中换来一致性和可运维性，代价是 AC 单点与性能天花板。华为的应对是 AC 堆叠/双机热备 + 直接转发卸载流量。\n2. **UDP 而非 TCP**：无线管理报文对时延敏感、可重传，用 UDP + 应用层 Echo 保活比 TCP 三次握手更轻，但也意味着可靠性要靠状态机和重传定时器自己兜，网络丢包会直接表现为 AP 上线慢或频繁掉线。\n3. **TLV 扩展而非固定字段**：牺牲了报文的紧凑性，换来厂商扩展空间和向前兼容。\n4. **自动升级机制**：方便了版本一致性，但 AP 重启下载固件期间业务中断，大网升级要分批。\n\n## 典型故障链路\n\nAP 不上线按序排查：物理与 PoE 供电 → AP 是否拿到 IP（DHCP）→ 是否拿到 AC 地址（Option 43/DNS）→ AC 是否可达（UDP 5246 是否被 ACL/防火墙拦截）→ 是否卡在 Join（白名单、证书、版本）→ 是否卡在 Image（固件服务器/隧道 MTU）→ 是否卡在 Configure（模板配置错误）。",
   "cmds": [
     "display ap all",
-    "display capwap configuration",
-    "display wlan config",
-    "display ap online-fail-record all"
+    "display ap config-info ap-name <name>",
+    "display capwap statistics",
+    "display ap online-fail-record all",
+    "display ac status"
   ],
   "pits": [
-    "AP 无法获取 AC 地址：检查 DHCP Option 43 或 DNS 配置",
-    "CAPWAP 隧道建立失败：检查 UDP 5246/5247 端口是否被防火墙拦截",
-    "AP 版本与 AC 不匹配：需确保 AP 加载与 AC 兼容的固件",
-    "直接转发模式下业务 VLAN 未放行：检查 AP 上行端口 Trunk 配置",
-    "AC 性能不足导致隧道转发丢包：考虑改为直接转发或扩容 AC"
+    "防火墙/ACL 未放行 UDP 5246 与 5247，AP 永远停在 Discovery",
+    "DHCP Option 43 格式写错（子选项类型与十六进制长度不符）",
+    "隧道 MTU 不够导致大包分片甚至 CAPWAP 数据报文被丢弃",
+    "直接转发时业务 VLAN 未延伸到 AP 接入端口，用户拿不到地址",
+    "AP 与 AC 版本不匹配触发自动升级，误判为反复掉线"
   ],
   "qa": [
     {
-      "q": "CAPWAP 协议的作用是什么？",
-      "a": "CAPWAP 用于 AC 与 AP 之间的通信，实现 AP 的集中管理、配置下发和用户数据隧道传输。"
+      "q": "CAPWAP 为什么要分控制隧道和数据隧道？",
+      "a": "控制隧道（UDP 5246）跑管理报文，量小但对可靠与时延敏感；数据隧道（UDP 5247）跑用户报文，量大且可用直接转发绕过 AC。分离后两者可分别优化、分别加密，也支持只建控制隧道。"
     },
     {
-      "q": "AP 如何发现 AC？",
-      "a": "AP 可通过 DHCP Option 43、DNS 解析或静态配置获取 AC 的 IP 地址，然后发送 Discovery Request 报文。"
+      "q": "AP 发现 AC 的方式有哪几种？",
+      "a": "静态配置 ap-address、DHCP Option 43、DNS 域名解析、二层/三层广播。现网三层组网多用 Option 43 或 DNS，跨广域网分支常用静态配置。"
     },
     {
-      "q": "CAPWAP 隧道转发和直接转发的区别？",
-      "a": "隧道转发用户数据经 AC 转发，集中安全策略但 AC 压力大；直接转发用户数据由 AP 直接转发，减轻 AC 负担但策略分散。"
+      "q": "隧道转发和直接转发的区别与选型？",
+      "a": "隧道转发用户报文封装进 CAPWAP 数据隧道送到 AC 出口，策略集中、漫游一致但 AC 是瓶颈；直接转发在 AP 本地打 VLAN tag 直接入交换机，路径短、AC 压力小但业务 VLAN 需延伸到接入端口。"
+    },
+    {
+      "q": "AP 上线卡在 Join 阶段怎么查？",
+      "a": "看 AC 上 AP 白名单/认证模式是否匹配、AP MAC 是否被允许、版本是否被 AC 拒绝、DTLS 证书是否可信，用 display ap online-fail-record 看失败原因码。"
     }
   ],
-  "syllabus": "HCIA-WLAN"
+  "syllabus": "HCIA-WLAN  WLAN 组网与 CAPWAP 隧道建立"
 }

@@ -8,39 +8,44 @@
     "IPSG",
     "IP Source Guard",
     "绑定表",
-    "Binding Table",
-    "Option82",
-    "非信任端口"
+    "binding table",
+    "仿冒网关攻击",
+    "DHCP 报文限速"
   ],
-  "one": "在二层建立 DHCP 绑定表，据此过滤非法 DHCP 报文并校验源 IP，防私接与仿冒。",
-  "analogy": "DHCP Snooping 就像小区门口的保安：只有物业（合法 DHCP Server）能发门禁卡，住户自己私发的卡一律没收，同时保安把每张卡登记成册（绑定表）。IPSG 则是单元楼下的刷卡闸机，进门必须刷登记过的卡，卡和人对不上就拦下。没有那本册子，闸机根本不知道谁是谁。",
-  "body": "## 为什么需要它\n\nDHCP 的设计假设是“内网可信”，任何主机都能应答 DHCP Discover。这个假设在接入层被打破后，会出现三类问题：\n\n- **私接 DHCP Server（Rogue DHCP）**：攻击者或误配置的家用路由器抢先应答，把网关、DNS 指向自己，形成中间人或直接断网。\n- **DHCP 饿死攻击（DHCP Starvation）**：伪造大量不同 MAC 的 Discover，耗尽地址池，合法用户拿不到地址。\n- **源 IP 仿冒**：主机手工配置别人的 IP 或伪造源 IP 发包，绕过基于 IP 的 ACL，或冒用已认证用户的权限。\n\nDHCP Snooping 解决前两个并顺带产出绑定表，IPSG 消费这张绑定表解决第三个。两者是**生产者—消费者**关系，IPSG 单独部署没有意义。\n\n## DHCP Snooping 的机制\n\n### 信任与非信任端口\n\n核心是一个二值属性：接口被配置为 `trusted` 或默认的 `untrusted`。\n\n- **信任端口**：允许转发 DHCP Offer/ACK/NAK 等服务器方向报文。通常只把**上行口**（连向合法 DHCP Server 或 DHCP Relay 的方向）设为信任。\n- **非信任端口**：只允许客户端方向的 DHCP 报文（Discover、Request、Decline、Release、Inform）通过；收到 Offer/ACK/NAK 直接丢弃。\n\n这就是“只准物业发卡”的实现方式——判断依据是**报文类型 + 入端口信任属性**，不需要识别服务器 IP，所以对 DHCP Relay 场景天然兼容（Relay 的 giaddr 变化不影响）。\n\n注意：DHCP Snooping 只处理**入方向**报文，出方向不检查。\n\n### 绑定表的生成\n\n绑定表（DHCP Snooping Binding Table）是整套机制的数据核心，典型字段：\n\n| 字段 | 说明 |\n|---|---|\n| MAC | 客户端硬件地址 |\n| IP | 分配到的地址 |\n| Lease | 租期 |\n| VLAN | 客户端所在 VLAN |\n| Interface | 接入端口 |\n| Type | 表项来源（DHCP / 静态） |\n\n生成时机是**监听 DHCP ACK**：ACK 是服务器对客户端的最终确认，此时 IP、MAC、租期、端口、VLAN 五元组齐全。Snooping 在转发 ACK 的同时把这条记录写入绑定表。\n\n几个关键细节：\n\n- **Release/Decline 会删表项**：客户端主动释放或声明地址冲突时，对应绑定被删除。\n- **租期到期自动老化**：表项按 Lease 时间老化，不是永久保存。\n- **静态表项**：手工 `dhcp snooping bind-table static` 配置，用于服务器在远端、Snooping 看不到 ACK 的场景（如跨三层、或客户端用静态 IP）。\n- **表项容量有限**：设备规格通常几千到几万条，超规格后新表项无法建立，IPSG 会误杀，这是现场常见故障。\n\n### Option 82\n\nSnooping 在转发客户端报文时插入 Option 82（Relay Agent Information），携带**接入端口、VLAN、设备 MAC** 等位置信息。作用有两个：\n\n1. 让 DHCP Server 按位置分配地址段（按楼栋/端口分池）。\n2. 服务器回包时带回 Option 82，Snooping 可据此校验回包是否来自正确的接入链路，防止跨端口注入。\n\n配置上有 `dhcp snooping option82 insert enable` 与 `rebind` 等模式，注意服务器是否支持 Option 82，部分老服务器会丢弃带 Option 82 的报文。\n\n### 速率限制\n\n针对饿死攻击，非信任端口可配 `dhcp snooping check dhcp-rate`，限制单位时间允许的 DHCP 报文数，超限端口进入 err-down 或丢弃。这是防 starvation 的主要手段。\n\n## IPSG 的机制\n\nIPSG（IP Source Guard）在**入方向**对 IP 报文做源地址校验，本质是一张基于绑定表动态生成的**硬件 ACL**：\n\n- 匹配条件：源 IP + 源 MAC（可只校验 IP，也可 IP+MAC 同时校验）。\n- 命中绑定表则放行，未命中则丢弃。\n- 绑定表变化时，ACL 表项随之增删，由 Snooping 驱动。\n\n部署位置是**接入端口**，通常与端口安全（Port Security）、DAI（Dynamic ARP Inspection）一起构成接入层三件套：IPSG 管 IP 层源地址，DAI 管 ARP，Port Security 管 MAC。\n\n### 与 DAI 的分工\n\n| 技术 | 校验对象 | 依赖 |\n|---|---|---|\n| IPSG | IP 报文源 IP/MAC | DHCP Snooping 绑定表 |\n| DAI | ARP 报文的 sender IP/MAC | DHCP Snooping 绑定表 |\n| Port Security | 源 MAC 数量与合法性 | 自身学习 |\n\n三者共用绑定表，所以现场通常一次性全开。\n\n## 设计取舍\n\n- **为什么用监听而不是代理**：Snooping 是旁路监听，不改 DHCP 交互流程，对服务器和客户端透明，部署成本低；代价是必须看到 ACK 才能建表，跨三层场景需要静态表项或让 Snooping 与 Relay 同设备。\n- **为什么信任端口是手工配的**：自动识别服务器不可靠（伪造服务器也能应答），把“谁是服务器”交给管理员判断，是安全设计上的保守选择。代价是配错方向就断网。\n- **IPSG 为什么用硬件 ACL**：接入端口流量大，软件查表跟不上，绑定表直接下发到芯片，线速校验。代价是表项规格受芯片 ACL 资源限制。\n\n## 典型部署顺序\n\n1. 全局 `dhcp snooping enable`，VLAN 内使能。\n2. 上行口配 `dhcp snooping trusted`。\n3. 非信任口配速率限制。\n4. 验证绑定表已生成。\n5. 再开 IPSG（顺序反了会先断网）。\n\n先开 Snooping 观察绑定表是否正常，再开 IPSG，是避免批量断网的关键操作习惯。",
+  "one": "交换机通过监听 DHCP 报文建立信任绑定表，据此过滤非法 DHCP 报文并校验源 IP。",
+  "analogy": "小区门禁系统：物业只允许从大门（trusted 口）进来的人登记入住，谁住哪户登记成一本书（绑定表）。之后有人在楼里冒充物业发假通知（仿冒 DHCP Server 发地址），或者拿别人家门牌号乱串门（IP 仿冒），保安一查登记本就知道对不对，直接拦下。",
+  "body": "## 为什么需要它\n\nDHCP 是典型的\"先到先得、无认证\"协议：客户端发出 DHCP Discover 时根本不知道谁是真正的服务器，谁先回 Offer 它就认谁。这个设计在 1993 年没问题，但在接入层交换机端口就是用户边界的今天，带来了三类现实攻击：\n\n1. **私设 DHCP Server（Rogue DHCP Server）**：员工把自己笔记本插在墙上，跑个 DHCP 服务发地址，网关指向自己。整段用户被引到攻击者主机，流量被镜像、被篡改，中间人攻击成立。\n2. **DHCP 饿死攻击（DHCP Starvation）**：攻击者用伪造的源 MAC 疯狂发 Discover，把 DHCP Server 的地址池耗光，合法用户拿不到地址，业务中断。\n3. **仿冒网关（ARP 欺骗的 DHCP 变种）**：伪服务器下发的网关地址指向攻击者，客户端主动把流量送给攻击者，不需要再去 ARP 欺骗。\n\n上述攻击的共同点是：**交换机在二层转发一切，它不参与 DHCP 协议，因此看不见这些事**。DHCP Snooping 的思路就是让交换机\"旁听\"DHCP 交互，把\"谁使用了哪个 IP、租期多久、哪个端口、哪个 MAC\"记下来，然后拿这份记录去做转发决策。\n\n## DHCP Snooping 的信任模型\n\n核心只有两个概念：\n\n- **trusted 端口**：连接 DHCP Server 或上行 DHCP Relay 的端口。从 trusted 口进来的 DHCP 应答报文（Offer/ACK/NAK）一律放行。\n- **untrusted 端口**：连接终端的端口。默认所有端口都是 untrusted，从 untrusted 口收到的 **DHCP Server 方向的报文（Offer/ACK/NAK）直接丢弃**，客户端方向的报文（Discover/Request/Decline/Release/Inform）正常转发。\n\n这就是为什么配置 DHCP Snooping 的第一个动作永远是把上行口 `dhcp snooping trusted`——不配，用户永远拿不到地址。这个\"默认全不信任\"的取舍很关键：它保证即使管理员漏配某条规则，也不会有 rogue server 生效。\n\n### 关于 DHCP Relay 场景\n\n如果网关侧由 DHCP Relay 转发，交换机上联口接的是 Relay（不是 Server），那从该口回来的 Offer 源 IP 是 Server 的地址，源 MAC 是 Relay 的地址。此时必须把上联口设为 trusted；同时 DHCP Snooping 只检查 DHCP 报文而不检查 Relay 的 giaddr 合法性，所以 Relay 到 Server 之间那一跳的安全要靠 DHCP Relay 所在的设备负责。\n\n## 绑定表（DHCP Snooping Binding Table）\n\n交换机为每一条成功分配记录一条绑定项，字段包括：\n\n| 字段 | 含义 | 来源 |\n|---|---|---|\n| MAC Address | 客户端 MAC | DHCP 报文 chaddr 字段 / 以太头源 MAC |\n| IP Address | 分配出去的 IP | DHCP ACK 中的 yiaddr |\n| Lease | 租期（秒） | ACK 中的 option 51 |\n| VLAN | 用户 VLAN | 收到报文的端口 PVID 或 VLAN |\n| Interface | 用户端口 | 收到请求的物理口 |\n\n绑定项的生成时机是**监听到 DHCP ACK**（对 DHCP Relay 场景是 ACK 从 trusted 口经过），不是 Request。因为只有 ACK 才是服务端最终确认。租期到期后条目自动老化删除；客户端发 Release 或 Decline 也会触发删除。\n\n**动态绑定表默认存在内存里，设备重启即丢失**。生产环境要落盘：`dhcp snooping user-bind auto-save` 或写到 flash，否则设备重启后所有用户短暂断网，必须重新 DHCP 才能恢复。\n\n另外还可以手工配置静态绑定项，用于服务器、打印机这类固定地址设备。\n\n## IPSG：拿绑定表做源 IP 校验\n\nDHCP Snooping 单独部署只能防私设服务器，防不了\"用户拿别人 IP 用\"。**IP Source Guard** 是在端口上把转发面与绑定表关联起来：\n\n端口开启 `ip source check user-bind enable` 后，从该端口收到的每一个 IP 报文，交换机查绑定表，要求 **源 IP、源 MAC、VLAN、入端口四元组与绑定表一致**，不一致直接丢弃。这实际上是给接入端口做了一张白名单。\n\nIPSG 的实现形态有两种：\n\n- **基于绑定表（user-bind）**：依赖 DHCP Snooping 绑定表或静态绑定，是 DHCP Snooping 的标准搭档。\n- **基于静态 ACL（静态 IP/MAC 绑定）**：没有 DHCP 的环境用，不如前者灵活。\n\n在硬件实现上，绑定表会被下发到接口的 **ACL 表项或 LPM/ACL 联合查找**中。这也是为什么 IPSG 有表项规格限制：一台接入交换机绑定表通常几千到几万条，超了就会导致新用户无法上线。规划时要按最大在线用户数核对产品规格。\n\n## 与相关技术的分工\n\n| 技术 | 校验对象 | 依赖绑定表 | 部署位置 |\n|---|---|---|---|\n| DHCP Snooping | DHCP 报文方向与速率 | 自己产生 | 接入层 |\n| IPSG | 报文源 IP/MAC/VLAN/端口 | 是 | 接入层用户口 |\n| DAI（动态 ARP 检测） | ARP 报文合法性 | 是 | 接入层用户口 |\n| Port Security | 源 MAC 数量与集合 | 否 | 接入层用户口 |\n| 802.1X | 用户身份认证（身份源） | 否（但可作绑定来源） | 接入层用户口 |\n\n典型组合是 **DHCP Snooping + IPSG + DAI + Port Security** 四件套：Port Security 限制每个口能学到的 MAC 数（配合 DHCP Snooping 的 `check max-user` 抗饿死），DHCP Snooping 管 DHCP 报文，IPSG 管源 IP，DAI 管 ARP。这四者共用同一张绑定表，所以 DHCP Snooping 是\"地基\"。\n\n## 防饿死攻击的处理\n\n单纯 DHCP Snooping 不阻止攻击者发大量 Discover。要配合：\n\n- `dhcp snooping check arp` / `dhcp snooping check ip`：检查 DHCP 报文的 chaddr 与以太头源 MAC 是否一致，防伪造；\n- `dhcp snooping check dhcp-chaddr enable`：丢弃二者不一致的报文；\n- `dhcp snooping max-user number`：限制单端口可建立的绑定项数量；\n- `dhcp snooping rate-limit`：限制端口 DHCP 报文速率。\n\n这几条是现场必配项，不配等于只防了一半。\n\n## 设计上的取舍\n\n- **为什么默认 untrusted**：安全默认值优先，代价是每台设备必须显式指定上行口，漏配就断网。这是\"显式优于隐式\"的取舍。\n- **为什么 DHCP Snooping 工作在二层旁路而不做 Relay**：旁路不改变 DHCP 交互路径，任何 DHCP Server 都能直接对接，部署成本低；如果设备做 Relay 就绑定了网络拓扑，不灵活。\n- **为什么 IPSG 不检查目的地址**：目的是防用户仿冒源，目的地址由路由表决定，不在接入层\"可信边界\"内。\n- **性能开销**：绑定表查询与 ACL 查找在 ASIC 内是线速的，但表项数量有硬限制。\n\n## 典型故障：用户拿不到地址\n\n排查顺序固定：端口是否被误设 trusted（攻击面）、上行口是否 trusted（拿不到地址最常见原因）、绑定表是否已满（`display dhcp snooping user-bind all` 看到大量条目）、DHCP 报文是否被 rate-limit 丢弃（查 `display dhcp snooping statistics`）、IPSG 是否把 DHCP 报文本身拦了（IPSG 通常不拦 DHCP，但配置顺序会）。",
   "cmds": [
-    "display dhcp snooping binding",
+    "display dhcp snooping binding all",
     "display dhcp snooping statistics",
+    "display dhcp snooping user-bind all",
     "display ip source check user-bind interface GigabitEthernet0/0/1",
     "display dhcp snooping configuration"
   ],
   "pits": [
-    "信任端口配反，DHCP Offer 被丢，全网拿不到地址",
-    "绑定表超规格后新用户被 IPSG 误杀，表现为部分终端不通",
-    "跨三层场景看不到 ACK，绑定表为空，需配静态表项",
-    "先开 IPSG 后开 Snooping，绑定表未建立导致批量断网",
-    "服务器不支持 Option 82 时插选项会导致分配失败"
+    "上联口忘配 dhcp snooping trusted，所有用户拿不到地址。",
+    "绑定表不落盘，设备重启后全用户短时中断。",
+    "绑定表规格超限会静默丢新用户，按最大在线数核对规格。",
+    "只开 Snooping 不开 rate-limit/max-user，挡不住饿死攻击。",
+    "IPSG 开了但无静态/动态绑定项，可导致该口全部流量丢弃。"
   ],
   "qa": [
     {
-      "q": "DHCP Snooping 的信任端口和非信任端口区别？",
-      "a": "信任口允许服务器方向报文（Offer/ACK/NAK）通过，一般配在上行口；非信任口只放行客户端方向报文，收到服务器应答直接丢弃，用于阻断私接 DHCP Server。"
+      "q": "DHCP Snooping 的 trusted/untrusted 端口分别放行什么报文？",
+      "a": "trusted 口放行所有 DHCP 报文，含 Offer/ACK/NAK；untrusted 口丢弃 Server 方向报文（Offer/ACK/NAK），仅放行客户端方向报文。默认所有端口为 untrusted。"
     },
     {
-      "q": "IPSG 依赖什么工作？绑定表怎么来？",
-      "a": "IPSG 依赖 DHCP Snooping 绑定表，把源 IP/MAC 校验下发为硬件 ACL。绑定表由监听 DHCP ACK 生成，也可手工配静态表项，按租期老化。"
+      "q": "IPSG 校验哪几个字段？",
+      "a": "源 IP、源 MAC、VLAN、入端口四元组，与 DHCP Snooping 绑定表或静态绑定项比对，不一致即丢弃。"
+    },
+    {
+      "q": "绑定表什么时候生成？",
+      "a": "在监听到 DHCP ACK 时生成，记录 MAC、IP、租期、VLAN、端口；Release/Decline/租期到期时删除。"
     },
     {
       "q": "如何防 DHCP 饿死攻击？",
-      "a": "在非信任端口配置 DHCP 报文速率限制（dhcp snooping check dhcp-rate），超限丢弃或 err-down 端口，同时可配合端口安全限制 MAC 数量。"
+      "a": "端口限速 dhcp snooping rate-limit、限制最大用户数 max-user、检查 chaddr 与源 MAC 一致性，配合 Port Security。"
     }
   ],
-  "syllabus": "HCIP-Datacom 安全技术（接入层安全 / DHCP Snooping 与 IPSG）"
+  "syllabus": "HCIP-Datacom 安全技术 或 HCIP-Security 接入安全"
 }

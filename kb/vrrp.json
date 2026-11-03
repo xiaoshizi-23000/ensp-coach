@@ -7,15 +7,16 @@
     "VRRP",
     "Virtual Router Redundancy Protocol",
     "虚拟路由冗余协议",
-    "Master/Backup",
+    "Master",
+    "Backup",
     "虚拟IP",
     "VIP",
     "优先级",
     "抢占"
   ],
-  "one": "多台路由器虚拟成一台网关，主设备故障时备设备秒级接管。",
-  "analogy": "就像小区门口只有一个门牌号（虚拟IP），但门岗其实有好几个保安轮流值班。平时只有队长（Master）站在门口指挥，其他人（Backup）在旁边待命，每隔一会儿队长就喊一声“我还在”。哪天队长突然不吭声了，等一小会儿还没动静，副队长立刻顶上，居民（终端）根本不知道换人了，因为门牌号一直没变。",
-  "body": "## 为什么需要 VRRP\n\n终端配置默认网关时只能填一个 IP。如果这台网关路由器挂了，终端不会自动换网关，整个网段就断网。VRRP 的思路是：让多台物理路由器共同组成一台**虚拟路由器（Virtual Router）**，对外暴露一个**虚拟 IP（VIP）** 和一个虚拟 MAC，终端把网关指向 VIP。物理设备之间通过选举产生一个 Master 负责转发，其余为 Backup 待命，Master 失效时 Backup 在秒级内接管，终端无感知。\n\n## 基本概念\n\n- **VRID**：虚拟路由器标识，1~255。同一广播域内同一 VRID 的一组设备构成一个 VRRP 备份组。\n- **VIP / 虚拟 MAC**：虚拟路由器的对外地址。虚拟 MAC 固定为 `00-00-5E-00-01-{VRID}`（十六进制），这是 VRRP 保留的 MAC 段，保证切换后终端 ARP 表项不用变。\n- **Master / Backup**：角色。Master 负责响应 VIP 的 ARP 请求、转发目的 MAC 为虚拟 MAC 的报文、周期性发送 Advertisement 报文。\n- **优先级 Priority**：0~255，默认 100。越大越优先。0 和 255 有特殊含义（见下）。\n- **抢占模式 Preempt**：默认开启。Backup 收到 Advertisement 后发现自己的优先级更高，会抢占成为 Master。\n\n## 报文格式\n\nVRRP 报文直接封装在 IP 之上，协议号 **112**，目的地址 **224.0.0.18**（VRRP 组播地址），TTL=255。VRRPv2 只有认证字段，VRRPv3 支持 IPv4/IPv6 且去掉了认证。关键字段：\n\n| 字段 | 作用 |\n|---|---|\n| Version / Type | 版本与类型，Type=1 为 Advertisement |\n| VRID | 虚拟路由器标识 |\n| Priority | 本设备在该备份组中的优先级 |\n| Count IP Addrs | VIP 个数 |\n| Auth Type / Auth Data | v2 的认证方式与认证字 |\n| Adver Int | Advertisement 发送间隔，默认 1 秒 |\n| Checksum | 校验和 |\n| IP Address(es) | 虚拟 IP 列表 |\n\nTTL=255 且目的地址必须是 224.0.0.18，接收方会校验，防止跨网段伪造的 VRRP 报文干扰选举。\n\n## 状态机\n\nVRRP 有三个状态：\n\n1. **Initialize**：初始状态，接口 down 或配置刚下发时处于此态。\n2. **Master**：周期性（默认 1s）发送 Advertisement，响应 VIP 的 ARP，转发流量。\n3. **Backup**：启动 Master_Down_Timer 计时器，等待 Advertisement。收到则重置计时器；超时则认为 Master 失效，触发选举。\n\nMaster_Down_Timer 的时长 = **3 × Adver_Int + Skew_Time**。Skew_Time = (256 − Priority) / 256 秒，用于让优先级高的 Backup 更早超时、更快抢到 Master，避免多个 Backup 同时超时后选举混乱。\n\n## 选举过程\n\n选举遵循两条规则，按顺序比较：\n\n1. **先比优先级**，大者胜。\n2. **优先级相同比接口主 IP**，大者胜。\n\n初始时所有设备都是 Backup，同时启动 Master_Down_Timer。优先级高的设备 Skew_Time 小，先超时，先发 Advertisement 并宣称自己是 Master，其他设备收到后转为 Backup 并重置计时器。这就是“先超时先当选”的巧妙设计，不需要额外的选举报文。\n\n**特殊优先级**：\n\n- **255**：拥有 VIP 的设备（IP 地址拥有者）自动为 255，一旦启动立即成为 Master，且不参与抢占比较，永远优先。\n- **0**：用于 Master 主动放弃。Master 要退出时发送 Priority=0 的 Advertisement，Backup 收到后立即（Skew_Time 后）接管，不用等 3 个周期，实现快速切换。\n\n## 抢占与非抢占\n\n- **抢占模式（默认）**：Backup 收到 Advertisement 后，若自己优先级更高（或优先级相同但主 IP 更大），且非 IP 拥有者，则忽略该报文，立即切换为 Master 并发送 Advertisement。适用于希望高优先级设备恢复后立刻回切的场景。\n- **非抢占模式**：只要收到合法 Advertisement 就保持 Backup，即使自己优先级更高。适用于链路抖动频繁、不希望来回切换的场景。\n\n注意：IP 地址拥有者（Priority=255）无论是否配置抢占都会抢占。\n\n## 切换时序\n\n以默认 Adver_Int=1s、Priority=100 为例：\n\n- Skew_Time = (256−100)/256 ≈ 0.61s\n- Master_Down_Timer = 3×1 + 0.61 ≈ 3.61s\n\nMaster 故障后，Backup 约 3.6 秒后接管。这期间流量会丢，对时延敏感业务可调小 Adver_Int（最小 1s，华为设备可配毫秒级但需全网一致），或结合 **BFD for VRRP** 做毫秒级检测。\n\n## 与相邻技术的分工\n\n- **VRRP vs 堆叠/CSS**：堆叠是把多台设备合成一台逻辑设备，控制面统一，切换更快但距离受限；VRRP 是协议级冗余，设备独立，部署灵活。\n- **VRRP vs BFD**：VRRP 靠报文超时检测，秒级；BFD 可做到毫秒级，常与 VRRP 联动，BFD 会话 down 时立即触发 VRRP 切换。\n- **VRRP vs 动态路由**：VRRP 解决终端网关冗余，动态路由解决设备间路径冗余，二者互补。\n- **VRRP vs MSTP/堆叠**：在二层网络中，VRRP 常与 MSTP 多实例配合，实现流量负载分担（不同 VRID 在不同设备上做 Master）。\n\n## 设计取舍\n\n- 用组播 + 固定虚拟 MAC，保证切换后终端 ARP 不变，代价是同一广播域内所有设备都要处理 VRRP 报文。\n- 用“超时 + 优先级”隐式选举，省去显式选举报文，代价是切换有秒级中断。\n- 默认抢占保证高优先级设备回切，代价是链路抖动时可能频繁切换，需按场景关闭抢占或调大延时。\n- 认证在 v2 中较弱（明文/简单认证），v3 直接移除认证，安全性依赖网络边界防护。",
+  "one": "多台路由器虚拟成一台，用优先级选出 Master 承担网关转发。",
+  "analogy": "就像小区门口本来只有一位保安（网关），他请假了整栋楼就没人收快递。于是安排三位保安轮班，平时只有队长在岗收件，另外两位在旁边盯着；队长一旦倒下，副队长几秒内顶上，住户根本感觉不到换人了。住户只知道门口那个岗位（虚拟 IP）一直有人，不用关心今天是谁值班。",
+  "body": "## 为什么需要 VRRP\n\n终端配置默认网关时只能填一个 IP。如果这个网关设备宕机，终端不会自动改网关，整网断流。靠终端跑动态路由不现实（PC 不支持、管理成本高），靠堆叠/集群又受距离和厂商限制。VRRP 的思路是：**让多台物理路由器共享一个虚拟 IP（VIP）和虚拟 MAC，对外表现为一台虚拟路由器**，终端只认 VIP，谁在背后转发由协议自己选。\n\n## 基本角色与虚拟路由器\n\n- **VRRP 路由器（VRRP Router）**：运行 VRRP 的物理设备，一台设备可加入多个 VRRP 组（VRID）。\n- **虚拟路由器（Virtual Router）**：一个 VRID 对应一个逻辑路由器，拥有 VIP 和虚拟 MAC。\n- **Master**：实际持有 VIP、响应 ARP、转发目的 MAC 为虚拟 MAC 的报文。\n- **Backup**：监听 Master 的 VRRP 通告，随时准备接管。\n- **虚拟 MAC**：`00-00-5E-00-01-{VRID}`，VRID 范围 1~255，所以虚拟 MAC 固定可算，终端 ARP 缓存无需变化。\n\n一个 VRRP 组内只有一台 Master，其余都是 Backup（VRRPv2 标准如此；VRRPv3 支持 255 个地址族，机制一致）。\n\n## 报文格式\n\nVRRP 报文直接封装在 IP 之上，协议号 **112**，目的地址 **224.0.0.18**（VRRPv2，TTL=255），源地址为接口主 IP。关键字段：\n\n| 字段 | 作用 |\n|---|---|\n| Version / Type | v2 中 Type=1 表示 Advertisement |\n| VRID | 虚拟路由器标识，1~255 |\n| Priority | 优先级 0~255，选举核心 |\n| Count IP Addrs | VIP 个数 |\n| Auth Type / Auth Data | v2 有认证字段（明文/MD5），v3 取消 |\n| Adver Int | 通告间隔，默认 1 秒 |\n| Checksum | 校验和 |\n| IP Address(es) | 虚拟 IP 列表 |\n\n注意：**VRRP 没有 TCP/UDP 端口**，抓包过滤用 `ip proto 112` 或 `vrrp`。\n\n## 选举机制\n\n选举只看两个维度，顺序不能颠倒：\n\n1. **优先级大者胜**，范围 0~255，默认 100。\n2. **优先级相同比接口主 IP 大者胜**（数值比较，不是字符串）。\n\n几个特殊优先级要记牢：\n\n- **255**：IP 地址拥有者（Interface IP Owner），即某台设备的接口 IP 恰好等于 VIP。它一旦启动立即成为 Master，且**不参与抢占判断**，永远优先。\n- **0**：保留值，Master 主动放弃时发送 Priority=0 的通告，让 Backup **立即**切换，不必等 Master_Down_Interval。\n- **100**：默认值，未配置时使用。\n\n### 状态机\n\nVRRP 有三个状态：**Initialize → Master / Backup**。\n\n- **Initialize**：接口 down、被管理性关闭、收到 Priority=0 的通告时进入。\n- **Backup**：启动 Master_Down_Timer（约 3×Adver Int + Skew_Time），收到 Master 通告就重置定时器；超时未收到则转 Master。\n- **Master**：周期性发通告（默认 1s），发 ARP 通告虚拟 MAC，转发流量；收到更高优先级通告且自己允许抢占时降为 Backup。\n\n**Skew_Time** 是设计上的一个细节：`(256 - Priority) / 256` 秒。优先级越低，等待越久，避免多台 Backup 同时超时后一起抢，造成短暂多 Master。这是用时间差换稳定性的典型取舍。\n\n### 抢占\n\n默认**开启抢占**。Backup 收到比自己优先级低的 Master 通告时，若抢占开启，会等待 **Preempt_Delay**（默认 0，可配）后抢占。关闭抢占（`vrrp vrid x preempt-mode disable`）适用于链路抖动频繁、不希望来回切的场景，代价是主设备恢复后长期处于 Backup，资源闲置。\n\n## 切换过程\n\nMaster 故障（掉电、接口 down、协议进程挂）时：\n\n1. Backup 的 Master_Down_Timer 超时（默认约 3.6s，即 3×1s + Skew_Time）。\n2. Backup 升为 Master，**立即发送免费 ARP（Gratuitous ARP）** 刷新交换机 MAC 表和终端 ARP 缓存。\n3. 开始周期性发 VRRP 通告，接管转发。\n\n所以切换时间量级是**秒级**，不是毫秒级。要更快只能调小 Adver Int（最小 1s，华为可配到 1s 以下需谨慎）或改用 BFD 联动。\n\n## 与相邻技术的分工\n\n- **VRRP vs 堆叠/iStack**：堆叠是设备级虚拟化，跨框转发、控制面合一；VRRP 是协议级冗余，设备独立、配置独立，适合跨机房、跨厂商。\n- **VRRP vs BFD**：VRRP 只能感知自身协议报文，链路中间断（如中间交换机故障）时 Master 仍能发通告但流量已断。**VRRP + BFD** 可把故障检测压到毫秒级，BFD 会话 down 直接触发切换。\n- **VRRP vs 动态路由**：OSPF/BGP 解决路径冗余，VRRP 解决**网关冗余**，两者互补，通常一起部署。\n- **VRRP vs VRRPv3**：v3 支持 IPv4/IPv6 统一、取消认证字段（改靠 IPsec 或上层保护）、通告间隔支持厘秒级。\n\n## 负载分担\n\n标准 VRRP 一组只有一个 Master，Backup 空转浪费带宽。工程上用**多组 VRRP + 不同优先级**做负载分担：路由器 A 在 VRID 1 中优先级 120、在 VRID 2 中优先级 100；路由器 B 反之。终端按网关地址分成两批，分别指向两个 VIP，两台设备都转发。这是部署层面的技巧，协议本身不提供。\n\n## 设计取舍\n\n- **为什么用组播 224.0.0.18 而不是单播**：Backup 无需知道 Master 地址，加入组即可监听，简化配置；代价是二层网络内通告泛洪。\n- **为什么虚拟 MAC 固定**：终端 ARP 缓存不失效，切换时只需免费 ARP 刷新，收敛快。\n- **为什么默认 1s 通告**：兼顾检测速度和网络开销，1s 对大多数园区网够用；金融等场景再上 BFD。\n- **认证字段在 v3 被删**：MD5 明文认证安全性有限，且增加互通复杂度，v3 把安全交给网络层。",
   "cmds": [
     "display vrrp",
     "display vrrp statistics",
@@ -23,32 +24,28 @@
     "display vrrp brief"
   ],
   "pits": [
-    "Adver_Int 全网必须一致，否则 Backup 误判 Master 失效导致双主",
-    "优先级相同比接口主 IP，改 IP 可能改变选举结果",
-    "IP 拥有者优先级恒为 255，配置抢占也压不过它",
-    "非抢占模式下高优先级设备恢复后不会回切，需确认业务预期",
-    "VRRP 报文 TTL=255，跨三层或 ACL 拦截 224.0.0.18 会导致选举失败"
+    "VRRP 无端口，抓包用 ip proto 112，别按 TCP/UDP 过滤",
+    "切换是秒级不是毫秒级，要快必须联动 BFD",
+    "优先级相同比接口主 IP，不是比 Router ID",
+    "IP 地址拥有者优先级 255，配置抢占也抢不过它",
+    "多组负载分担时两组 VIP 不能配在同一接口同一网段冲突"
   ],
   "qa": [
     {
-      "q": "VRRP 选举依据是什么？",
-      "a": "先比优先级（大者胜），优先级相同比接口主 IP（大者胜）。IP 拥有者优先级 255 恒为 Master，0 表示主动放弃。"
+      "q": "VRRP Master 选举依据是什么？",
+      "a": "先比 Priority（0~255，默认 100，大者胜），相同再比接口主 IP（大者胜）。Priority=255 的 IP 地址拥有者直接为 Master。"
     },
     {
-      "q": "Master_Down_Timer 怎么算？",
-      "a": "3×Adver_Int + Skew_Time，Skew_Time=(256−Priority)/256 秒，让高优先级 Backup 更早超时先当选。"
+      "q": "Master 故障后多久切换？",
+      "a": "Backup 等 Master_Down_Timer 超时，约 3×Adver Int + Skew_Time，默认约 3.6 秒，随后升 Master 并发免费 ARP。"
     },
     {
-      "q": "抢占和非抢占区别？",
-      "a": "抢占：Backup 发现自身优先级更高即切换为 Master；非抢占：收到 Advertisement 就保持 Backup，不主动抢。IP 拥有者始终抢占。"
+      "q": "VRRP 和 BFD 为什么要联动？",
+      "a": "VRRP 只能感知协议报文，中间链路故障时 Master 仍发通告但流量不通；BFD 毫秒级检测链路，down 后立即触发切换。"
     },
     {
-      "q": "VRRP 虚拟 MAC 是什么？",
-      "a": "00-00-5E-00-01-{VRID}，固定格式，保证切换后终端 ARP 表项不变。"
-    },
-    {
-      "q": "如何加快 VRRP 切换？",
-      "a": "调小 Adver_Int（需全网一致），或配置 BFD for VRRP 实现毫秒级检测联动切换。"
+      "q": "如何用 VRRP 做负载分担？",
+      "a": "建多个 VRID，不同设备在不同组中优先级不同，终端分两批指向不同 VIP，两台设备同时转发。"
     }
   ],
   "syllabus": "HCIA-Datacom 可靠性技术（VRRP 原理与配置）"

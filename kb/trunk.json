@@ -7,39 +7,47 @@
     "Trunk",
     "802.1Q",
     "VLAN Tag",
-    "干道",
-    "Tagged/Untagged",
-    "PVID"
+    "dot1q",
+    "PVID",
+    "Hybrid"
   ],
-  "one": "Trunk 是在一条物理链路上用 802.1Q 标签承载多个 VLAN 的干道链路。",
-  "analogy": "把交换机之间的 Trunk 链路想成一条高速公路，VLAN 就是不同颜色的货车。每辆货车车头贴一个颜色标签（802.1Q Tag），收费站（交换机）看标签决定放行到哪条出口。没有标签的默认按入口的默认颜色（PVID）处理。这样一条路就能跑多种颜色的车，不用每种颜色修一条专路。",
-  "body": "## 为什么需要 Trunk\n\n接入层交换机每个 VLAN 都要跨设备延伸到核心，如果每个 VLAN 用一条物理链路互联，端口和线缆数量会爆炸。Trunk（干道）用一条链路承载多个 VLAN，靠 **802.1Q 标签** 区分报文属于哪个 VLAN，这是二层网络扩展的基础。\n\n## 802.1Q 帧格式\n\n标准以太网帧在 SA 和 Type/Length 之间插入 4 字节 802.1Q Tag：\n\n| 字段 | 长度 | 说明 |\n|------|------|------|\n| TPID | 2 字节 | 固定 0x8100，标识这是一个 802.1Q 帧 |\n| Priority (PCP) | 3 bit | 优先级，用于 QoS |\n| DEI/CFI | 1 bit | 丢弃 eligible 指示，通常 0 |\n| VLAN ID | 12 bit | 有效范围 1–4094，0 和 4095 保留 |\n\n插入 Tag 后帧长增加 4 字节，超过 1518 的帧称为 Baby Giant，交换机需支持相应处理。\n\n## 端口链路类型与标签处理\n\n华为交换机端口链路类型主要有 Access、Trunk、Hybrid：\n\n- **Access**：只属于一个 VLAN，收方向打上 PVID 标签，发方向剥离标签，终端无感知。\n- **Trunk**：可承载多个 VLAN，收方向：带 Tag 且 VLAN 在允许列表则保留，不带 Tag 则打 PVID；发方向：VLAN 在允许列表且等于 PVID 时可配置是否剥离（默认剥离），其他允许 VLAN 带 Tag 发出。\n- **Hybrid**：更灵活，可逐 VLAN 配置 tagged/untagged，常用于交换机连接 IP 话机、AP 等场景。\n\n关键规则：**Trunk 口只允许一个 VLAN 以 Untagged 方式发出，通常就是 PVID**。因为对端收到无标签帧只能按自己的 PVID 归类，多个 untagged VLAN 会冲突。\n\n## 收发处理流程（以华为 VRP 为例）\n\n**接收方向**：\n1. 检查帧是否带 Tag。\n2. 带 Tag：检查 VLAN ID 是否在端口允许列表，是则接收并保留 Tag；否则丢弃。\n3. 不带 Tag：打上端口 PVID，若 PVID 在允许列表则接收，否则丢弃。\n\n**发送方向**：\n1. 查 MAC 表得到出端口和 VLAN。\n2. 若出端口为 Trunk 且该 VLAN 在允许列表：\n   - VLAN == PVID 且端口配置 `port trunk pvid vlan` 后默认 untagged 发出（可配 `port trunk allow-pass vlan` 控制）。\n   - 其他 VLAN 带 Tag 发出。\n3. 若 VLAN 不在允许列表，丢弃。\n\n## PVID 的作用与设计取舍\n\nPVID（Port Default VLAN ID）是端口对 **Untagged 帧** 的归属 VLAN。设计上让 Trunk 口只有一个 untagged VLAN，是为了兼容不支持 Tag 的终端和简化对端处理。代价是配置时必须保证链路两端 PVID 一致，否则无标签帧会被归到不同 VLAN，造成“能通但 VLAN 不对”的隐蔽故障。\n\n## 与 Access/Hybrid 的分工\n\n- 接终端用 Access，简单、安全，终端无法伪造 Tag。\n- 交换机互联用 Trunk，标准化、互通性好。\n- 需要同一端口对部分 VLAN 打标签、部分不打标签（如 IP 话机 + PC）用 Hybrid。\n\n## 设计取舍\n\nTrunk 用标签换端口密度，但带来：\n- 需要规划允许 VLAN 列表，避免广播泛洪到不该去的链路（`port trunk allow-pass vlan`）。\n- Native VLAN（PVID）不一致会导致 VLAN 跳变和安全隐患，建议两端一致并避免使用 VLAN 1。\n- 标签增加 4 字节，对 MTU 敏感的场景需确认设备支持。\n",
+  "one": "一条链路承载多个 VLAN，用 802.1Q 标签区分报文归属",
+  "analogy": "一条物理链路就像一根公共走廊，不同部门的文件都要从这儿过。Trunk 就是给每份文件套一个写着部门编号的信封（Tag），收件方看到编号就知道该送到哪个科室。要是走廊尽头只有一个部门（Access），那就不用信封了，直接扔进去就行；所以 Access 口收发都不带标签，Trunk 口默认都带着标签走。",
+  "body": "## 为什么需要 Trunk\n\n交换机上划分 VLAN 之后，每个 VLAN 是一个广播域。如果两台交换机各自有 VLAN 10、VLAN 20，要让同一 VLAN 跨设备互通，直觉做法是每个 VLAN 拉一根线互联。3 个 VLAN 要 3 根线，50 个 VLAN 要 50 根线，端口和线缆成本不可接受，而且链路利用率极低。\n\nTrunk 的思路是**复用**：一根物理链路上跑所有 VLAN 的流量，靠报文头里的一个标签字段标识“这个帧属于哪个 VLAN”。这个标签就是 IEEE 802.1Q 定义的 VLAN Tag。\n\n### 与 Access 的关系\n\n- **Access 口**：只属于一个 VLAN，收方向把无标签帧打上 PVID，发方向把标签剥掉再发出。终端网卡不认识 802.1Q，所以必须剥。\n- **Trunk 口**：默认属于所有 VLAN，收发都带标签，只有 PVID 对应的 VLAN 例外（华为 VRP 默认 PVID=1，VLAN 1 报文在 Trunk 上不带标签）。\n- **Hybrid 口**：华为设备特有，可以逐 VLAN 配置“发的时候带不带标签”，是 Access 与 Trunk 的超集。\n\n注意 Trunk 和 Hybrid 都不是协议，只是端口对标签的处理策略；真正的协议是 802.1Q。考试里常把“Trunk 端口”和“802.1Q 封装”混为一谈，需分清。\n\n## 802.1Q 帧格式\n\n标准以太网帧在 SA（源 MAC）和 Type/Length 之间插入 4 字节的 Tag：\n\n| 字段 | 长度 | 说明 |\n|---|---|---|\n| TPID | 2 字节 | 固定 0x8100，标识这是 802.1Q 帧 |\n| PRI（Priority） | 3 bit | 802.1p 优先级，0~7，用于 QoS |\n| CFI/DEI | 1 bit | 规范格式指示，以太网取 0 |\n| VLAN ID | 12 bit | 0~4095，可用 1~4094 |\n\n插入 Tag 后 FCS 必须重算，因为帧内容变了。这是很多“为什么抓包看不到原 FCS”疑问的根源。\n\nVLAN ID 只有 12 bit，理论 4096 个，去掉 0 和 4095 保留值，实际可用 4094 个。VLAN 1 是默认 VLAN，VLAN 1002~1005 在 Cisco 上保留给 FDDI/Token Ring，华为设备上没这个限制，但工程上仍不建议用 VLAN 1 承载业务。\n\n### TPID 的意义\n\nTPID=0x8100 是标准值。QinQ 外层用 0x8100，内层可以是 0x8100（基本 QinQ），也可以配置成其他值（如 0x9100）以兼容某些厂商设备。设备靠 TPID 判断“这个帧后面还跟不跟 Tag”，所以 TPID 配错会导致双层标签只被识别一层。\n\n## 端口收发的完整处理流程\n\n以华为 VRP 为例，一个帧从端口进来，处理顺序是：\n\n### 入方向（Ingress）\n\n1. 判断帧是否带 Tag。\n2. **Access 口**：\n   - 收到无 Tag 帧 → 打上端口的 PVID，允许通过（前提 PVID 对应的 VLAN 已创建且放行）。\n   - 收到有 Tag 帧 → 直接丢弃。终端不该发带标签的帧，出现即异常（常见于误把交换机当终端接）。\n3. **Trunk 口**：\n   - 收到无 Tag 帧 → 打上 PVID（默认 VLAN 1），且要求 PVID 在该 Trunk 的允许列表中。\n   - 收到有 Tag 帧 → 检查 VLAN ID 是否在 `port trunk allow-pass vlan` 列表中，在则通过，不在则丢弃。\n4. **Hybrid 口**：\n   - 无 Tag → 打 PVID。\n   - 有 Tag → 查 `port hybrid vlan X tagged/untagged` 是否放行。\n\n关键点：**入方向只有“打标签”，没有“剥标签”**。剥标签只发生在出方向。这一点是排错时的核心线索——如果帧在一个 VLAN 里进了错误的广播域，问题往往在入方向的 PVID，而不是出方向。\n\n### 出方向（Egress）\n\n1. 查 MAC 表确定出端口。\n2. 按出端口的类型与 VLAN 配置决定是否保留 Tag：\n   - Access 口：剥掉 Tag 发出。若帧的 VLAN 不等于端口 PVID，不会从该口发出。\n   - Trunk 口：VLAN 在允许列表中则带 Tag 发出；若 VLAN == PVID 则剥掉 Tag 发出（VRP 默认行为）。\n   - Hybrid 口：按该 VLAN 的 tagged/untagged 属性决定。\n\n### 为什么出方向要剥标签\n\n因为绝大多数终端网卡不解析 802.1Q，收到带 Tag 的帧会当成畸形帧丢弃，或者因为帧长超过 MTU（1518+4=1522）而丢。只有服务器网卡做了 VLAN 子接口（如 Linux 的 `eth0.10`）或支持 VLAN offload 时才会主动收带 Tag 帧。这就是“服务器单网卡跑多 VLAN”场景必须配 Trunk 加子接口的原因。\n\n## PVID 与允许列表的分工\n\n这是最容易配错的地方，两者职责完全不同：\n\n- **PVID**：只作用于**无 Tag 帧**。决定“没有标签的帧该归到哪个 VLAN”。Trunk 口有且只有一个 PVID。\n- **allow-pass vlan**：作用于**有 Tag 帧**。决定“哪些 VLAN 的带标签帧可以过”。\n\n所以一条 Trunk 上想让 VLAN 10 通，必须同时满足：VLAN 10 在 allow-pass 列表里（有 Tag 帧才过），或者 VLAN 10 就是 PVID（无 Tag 帧才过）。只配其中一项都会导致不通，这是现场最常见的配置遗漏。\n\n另一个易错点：PVID 对应的 VLAN 如果不允许通过该 Trunk，无 Tag 帧进来后无处可去，直接丢。所以改 PVID 时务必同步检查 allow-pass。\n\n## 与相邻技术的分工\n\n| 技术 | 定位 | 与 Trunk 的关系 |\n|---|---|---|\n| Access | 单 VLAN 接终端 | Trunk 的对立面，解决“终端不认标签” |\n| Hybrid | 灵活控制标签 | Trunk 的超集，能实现 Trunk 做不到的“同 VLAN 部分口带标签部分不带” |\n| QinQ | 双层标签，运营商常用 | 在 Trunk 基础上再套一层，外层 TPID 同样是 0x8100 |\n| STP | 防环 | Trunk 上跑的是同一棵生成树，MSTP 可实现每 VLAN 一棵树，与 Trunk 配合实现负载分担 |\n| Eth-Trunk | 链路聚合 | 名字相近完全无关，Trunk 是 VLAN 复用，Eth-Trunk 是带宽叠加，两者常叠加使用 |\n| VXLAN | 大二层 | 用 VNI 替代 VLAN ID 突破 4094 限制，本质是 Trunk 思想在 Overlay 的延伸 |\n\n**Trunk 与 Eth-Trunk 的混淆**是初学者高频错误：`port link-type trunk` 和 `interface Eth-Trunk 1` 是两件事，前者管 VLAN，后者管链路捆绑。\n\n## 设计取舍\n\n1. **为什么用 4 字节插入而不是重写整个帧**：向后兼容。去掉 Tag 后帧结构与标准以太网完全一致，非 802.1Q 设备仍能处理（只是不理解标签）。\n2. **为什么只有 12 bit**：1980 年代设计时认为 4094 个广播域足够，没想到数据中心规模。这个限制直接催生了 QinQ 和 VXLAN。\n3. **为什么 Trunk 默认 VLAN 1 不打标签**：为兼容不支持 Tag 的老设备和某些直连场景。工程上建议把 PVID 改成不承载业务的空闲 VLAN，避免无 Tag 帧误入 VLAN 1 造成广播泛滥。\n4. **为什么不设计成“按需打标签”的单一端口类型**：Access 和 Trunk 的二分法简化了转发查表逻辑（Access 口出方向不用判断 VLAN 是否匹配，只比 PVID），Hybrid 则牺牲了这种简洁性来换灵活性。\n\n## 报文交互实例\n\nPC-A（VLAN 10，接 SW1 的 GE0/0/1 Access）访问 PC-B（VLAN 10，接 SW2 的 GE0/0/1 Access），SW1 与 SW2 之间 GE0/0/24 为 Trunk，allow-pass vlan 10 20：\n\n1. PC-A 发出无 Tag 帧，SW1 GE0/0/1 入方向打 PVID=10 的 Tag。\n2. SW1 查 MAC 表，出端口 GE0/0/24。查 allow-pass 含 VLAN 10，帧带 Tag 发出。\n3. SW2 GE0/0/24 入方向检查 VLAN 10 在允许列表，通过，Tag 保留。\n4. SW2 查 MAC 表，出端口 GE0/0/1 是 Access，PVID=10 与帧 VLAN 一致，剥 Tag 发出。\n5. PC-B 收到普通以太网帧。\n\n如果第 2 步 allow-pass 少配 VLAN 10，帧被丢；如果第 4 步 SW2 的 GE0/0/1 PVID 配成 20，帧被丢（VLAN 不匹配 Access 口 PVID）。这两个丢包点就是 `display` 系列命令要逐一核对的地方。",
   "cmds": [
     "display port vlan",
+    "display interface GigabitEthernet 0/0/1",
     "display vlan",
-    "display interface GigabitEthernet0/0/1",
-    "display mac-address vlan 10"
+    "display vlan verbose"
   ],
   "pits": [
-    "两端 PVID 不一致导致无标签帧归错 VLAN",
-    "Trunk 允许列表漏配 VLAN 导致业务不通",
-    "多个 VLAN 配成 untagged 发出造成冲突",
-    "VLAN 1 作为 Native VLAN 存在安全隐患",
-    "忘记放行管理 VLAN 导致远程登录中断"
+    "PVID 配了但 allow-pass 没放行，无 Tag 帧照样丢",
+    "Trunk 口误接终端，终端收到带 Tag 帧直接丢包",
+    "VLAN 未创建就配 allow-pass，命令报错或不通",
+    "改 PVID 后忘了同步检查允许列表",
+    "QinQ 场景 TPID 配错，双层标签只识别一层"
   ],
   "qa": [
     {
-      "q": "Trunk 端口收到不带标签的帧如何处理？",
-      "a": "打上端口 PVID，若 PVID 在允许列表中则接收，否则丢弃。"
+      "q": "Trunk 口收到无 Tag 帧如何处理？",
+      "a": "打上该端口 PVID 作为 VLAN ID，且要求 PVID 对应 VLAN 在该 Trunk 的 allow-pass 列表中，否则丢弃。入方向只打标签不剥标签。"
     },
     {
-      "q": "802.1Q Tag 中 VLAN ID 多少位？有效范围？",
-      "a": "12 bit，有效范围 1–4094，0 和 4095 保留。"
+      "q": "PVID 和 allow-pass 有什么区别？",
+      "a": "PVID 只作用于无 Tag 帧，决定其归属 VLAN；allow-pass 作用于有 Tag 帧，决定哪些 VLAN 可通行。两者职责不同，需同时配置正确。"
     },
     {
-      "q": "Trunk 和 Hybrid 的主要区别？",
-      "a": "Trunk 只允许一个 untagged VLAN（PVID），Hybrid 可逐 VLAN 配置 tagged/untagged，更灵活。"
+      "q": "802.1Q Tag 有多少字节，包含哪些字段？",
+      "a": "4 字节：TPID 2 字节固定 0x8100，PRI 3 bit，CFI/DEI 1 bit，VLAN ID 12 bit。插入后 FCS 需重算。"
+    },
+    {
+      "q": "Access 口和 Trunk 口出方向处理有何不同？",
+      "a": "Access 口剥掉 Tag 发出且要求帧 VLAN 等于 PVID；Trunk 口默认带 Tag 发出，仅当 VLAN 等于 PVID 时剥 Tag。"
+    },
+    {
+      "q": "为什么 VLAN ID 只有 4094 个可用？",
+      "a": "12 bit 共 4096 个值，0 和 4095 为保留值，实际可用 1~4094。该限制催生了 QinQ 与 VXLAN。"
     }
   ],
-  "syllabus": "HCIA-Datacom 3.2 VLAN 与 Trunk"
+  "syllabus": "HCIA-Datacom 局域网技术（VLAN 与 Trunk 配置）"
 }

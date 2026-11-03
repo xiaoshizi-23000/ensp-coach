@@ -6,44 +6,45 @@
   "keys": [
     "OSPF",
     "Open Shortest Path First",
+    "开放式最短路径优先",
     "邻居建立",
     "Hello",
-    "链路状态"
+    "邻居状态机"
   ],
-  "one": "OSPF 是一种链路状态路由协议，通过交换 LSA 构建 LSDB 并运行 SPF 算法计算路由。",
-  "analogy": "OSPF 就像一群人在一个房间里互相通报自己认识谁、路况如何。每个人先跟旁边的人打招呼（Hello），确认对方愿意跟自己聊天（邻居条件匹配），然后各自把自己知道的路线图（LSA）发给所有人，最后每个人手里都有一张完整的地图（LSDB），自己算出去哪儿怎么走最快（SPF）。这样设计是因为大家各自算路，不容易被别人的错误信息带偏。",
-  "body": "## 为什么需要 OSPF\n\n在 OSPF 出现之前，大型网络主要用 RIP。RIP 是距离矢量协议，只告诉邻居“我到某个网段有多远”，路由器不知道拓扑全貌，容易产生环路（靠水平分割、毒性逆转等补丁缓解），收敛慢（180 秒失效计时器），且最大跳数 15 跳限制了网络规模。OSPF 作为链路状态协议，每台路由器都掌握全网拓扑，独立运行 SPF 计算无环最短路径树，收敛快、支持大规模网络、支持 VLSM 和 CIDR，成为企业网和运营商网络的主流 IGP。\n\n## 核心机制：链路状态与 SPF\n\nOSPF 路由器维护三张表：\n\n- **邻居表**：记录邻居状态，由 Hello 报文维护。\n- **LSDB（链路状态数据库）**：存储收到的所有 LSA，全网同区域内的 LSDB 必须完全同步。\n- **路由表**：对 LSDB 运行 SPF 算法得到的最短路径树，再转换成路由条目。\n\n工作流程可以概括为：发现邻居 → 建立邻接 → 交换 LSDB → 运行 SPF → 生成路由 → 维护邻居。\n\n### 报文类型\n\nOSPF 直接封装在 IP 之上，协议号 89。共有五种报文：\n\n| 类型 | 名称 | 作用 |\n|------|------|------|\n| 1 | Hello | 发现和维护邻居、选举 DR/BDR |\n| 2 | DD（Database Description） | 描述本地 LSDB 摘要，用于数据库同步 |\n| 3 | LSR（Link State Request） | 请求缺失的 LSA |\n| 4 | LSU（Link State Update） | 携带完整 LSA 发送 |\n| 5 | LSAck（Link State Acknowledgment） | 确认收到 LSA |\n\n### Hello 报文与邻居建立条件\n\nHello 报文是 OSPF 邻居关系的基石，默认每 10 秒（广播网络）或 30 秒（NBMA）发送一次，Dead 计时器为 Hello 的 4 倍（40 秒或 120 秒）。Hello 报文中包含以下关键字段，**只有这些字段全部匹配，邻居才能建立**：\n\n1. **Router ID 不能相同**：Router ID 是路由器的唯一标识，冲突会导致邻居无法建立。\n2. **Area ID 必须一致**：Hello 报文携带区域号，区域号不同直接丢弃。\n3. **认证类型和认证密码必须一致**：支持 Null、明文、MD5、HMAC-SHA 等。\n4. **Hello 间隔和 Dead 间隔必须一致**：时间参数不匹配会导致邻居震荡或无法建立。\n5. **网络掩码必须一致**（广播网络和 NBMA 网络）：在点到点网络和虚链路上不检查掩码。\n6. **Stub 区域标志必须一致**：E-bit 必须匹配。\n7. **MTU 必须一致**（影响 DD 交换，严格来说不是 Hello 条件，但 MTU 不一致会导致邻接卡在 ExStart 状态）。\n\n此外，两台路由器必须在同一个网段、接口必须启用 OSPF（network 命令宣告或接口下 ospf enable），且接口状态为 Up。\n\n### 邻居状态机\n\nOSPF 邻居建立经历以下状态，排错时看状态就能定位问题：\n\n- **Down**：初始状态，未收到 Hello。\n- **Init**：收到对方的 Hello，但对方 Hello 的邻居列表中没有自己的 Router ID。\n- **2-Way**：双方 Hello 中都包含对方 Router ID，邻居关系建立。在广播网络中，非 DR/BDR 之间停留在此状态是正常的。\n- **ExStart**：开始交换 DD 报文，协商主从关系（Router ID 大者为主）。\n- **Exchange**：交换 DD 报文，描述各自 LSDB 摘要。\n- **Loading**：根据 DD 摘要发送 LSR 请求缺失的 LSA，对方用 LSU 回应。\n- **Full**：LSDB 同步完成，邻接关系建立。\n\n只有到达 Full 状态的路由器之间才会交换完整的 LSA 并参与 SPF 计算。\n\n### DR/BDR 选举\n\n在广播多路访问网络（如 Ethernet）中，如果所有路由器两两建立邻接，N 台路由器需要 N(N-1)/2 个邻接关系，LSA 泛洪会爆炸。OSPF 引入 DR（指定路由器）和 BDR（备份指定路由器）来减少邻接数量：所有非 DR/BDR 只与 DR/BDR 建立 Full 邻接，DR 负责代表网络向其他路由器泛洪 LSA。\n\n选举规则：\n\n1. 比较接口的 DR 优先级（0-255，默认 1，0 表示不参与选举）。\n2. 优先级相同则比较 Router ID，大者胜出。\n3. 选举是非抢占的，DR 一旦选出，除非 DR 失效，否则不会因为新加入更高优先级的路由器而重新选举。\n\n### 区域划分\n\nOSPF 通过区域（Area）实现分层设计，减少 LSDB 规模和 SPF 计算频率。所有区域必须连接到骨干区域 Area 0，非骨干区域之间的通信必须经过 Area 0。区域边界路由器（ABR）连接多个区域，负责在区域间传递路由摘要（Type 3 LSA）。这种设计把拓扑变化限制在区域内，提高网络稳定性。\n\n### LSA 类型概览\n\n| 类型 | 名称 | 产生者 | 泛洪范围 |\n|------|------|--------|----------|\n| 1 | Router LSA | 每台路由器 | 本区域 |\n| 2 | Network LSA | DR | 本区域 |\n| 3 | Summary LSA | ABR | 本区域（除源区域） |\n| 4 | ASBR Summary LSA | ABR | 本区域（除源区域） |\n| 5 | AS External LSA | ASBR | 整个 AS（除 Stub 区域） |\n| 7 | NSSA External LSA | ASBR | NSSA 区域 |\n\n### 与相邻技术的分工\n\n- **OSPF vs IS-IS**：两者都是链路状态协议，IS-IS 基于 CLNS，扩展性更好，常用于运营商骨干；OSPF 基于 IP，企业网更常见。\n- **OSPF vs BGP**：OSPF 是 IGP，负责域内路由；BGP 是 EGP，负责域间路由。OSPF 不承载大规模 Internet 路由。\n- **OSPF vs RIP**：RIP 是距离矢量，OSPF 是链路状态，后者收敛快、无环路、支持大网络。\n\n### 设计取舍\n\nOSPF 用泛洪换取全网拓扑一致性，代价是 LSDB 规模和 SPF 计算开销。通过区域划分、DR/BDR 选举、LSA 老化机制（3600 秒）和定期刷新（1800 秒）来平衡收敛速度和资源消耗。Hello 间隔和 Dead 间隔可调，但必须一致，调小可加快收敛但增加报文开销。",
+  "one": "链路状态型IGP，通过Hello建立邻居、泛洪LSA、跑SPF算出最短路径树。",
+  "analogy": "OSPF 就像一栋楼里所有住户一起维护一张完整的楼层地图。每个人先在楼道里打个招呼（Hello），确认对方跟自己站在同一层、说同一种方言、报数的时间对得上，才算认识；认识之后互相把自己的门牌和到邻居的距离写在小纸条上，传遍整栋楼，最后每人手里都有一张完整地图，自己算最短路线。之所以要这么麻烦，是因为只有人手一张全图，某条路断了大家才能各自重算，而不用等谁下命令。",
+  "body": "## 为什么要有 OSPF\n\n距离矢量协议（RIP）只知道自己到目标的\"跳数\"和\"下一跳是谁\"，邻居说什么就信什么，收敛慢、有环路风险、可扩展性差。OSPF 是链路状态（Link State）协议，每台路由器都主动描述\"我连着谁、链路代价多少\"，把这些描述汇总成一张全网的拓扑图，各自用 SPF（Dijkstra）算法独立算出最短路径树。信息源统一，计算结果就不会互相矛盾，收敛快，天然无环。\n\nOSPF 的几个基本设计取舍：\n\n- **层次化**：用 area（区域）把拓扑切成块，区域内做完整的 LSA 泛洪和 SPF，区域间只传汇总路由。骨干区 Area 0 是必经的中转，非骨干区域必须直连 Area 0。\n- **无类路由**：报文里携带掩码，支持 VLSM/CIDR，天然支持认证。\n- **组播**：224.0.0.5（AllSPFRouters）和 224.0.0.6（AllDRouters），不走广播，减少无关设备开销。\n- **IP 协议号 89**：直接封装在 IP 之上，没有 TCP/UDP 的可靠传输，靠 LSA 老化、重传、序号来解决可靠性。\n\n## 五种报文\n\nOSPF 所有消息都用同一种头部：版本号、Type、报文长度、Router ID、Area ID、校验和、认证类型与认证数据。Type 决定是哪一种：\n\n| Type | 报文 | 作用 |\n|---|---|---|\n| 1 | Hello | 发现、维护邻居，选 DR/BDR |\n| 2 | DD（Database Description） | 交换 LSA 摘要，协商主从 |\n| 3 | LSR（Link State Request） | 请求自己缺的 LSA 全文 |\n| 4 | LSU（Link State Update） | 携带 LSA，泛洪或响应请求 |\n| 5 | LSAck | 确认收到 LSU |\n\n注意一个常见误解：**Hello 只负责发现和维护邻居关系，真正的链路状态同步靠 DD/LSR/LSU/LSAck 这套\"数据库同步\"流程**。Hello 里携带的 LSA 摘要只是加速判断（比如邻居看到的 Area 0 的 LSA 和我不一样），不会直接同步数据库。\n\n## Hello 报文的内容\n\nHello 报文除了公共头之外，带这些关键字段：\n\n- **Network Mask**：发送接口的掩码。在广播网和 NBMA 网上，两端掩码不一致邻居起不来；点到点和虚链路不做检查。\n- **HelloInterval**：发送周期，广播/P2P 默认 10s，NBMA/P2MP 默认 30s。\n- **RouterDeadInterval**：认为邻居失效的时间，默认是 HelloInterval 的 4 倍。\n- **Options**：E-bit 表示是否支持外部路由（AS-External LSA），N-bit/P-bit 用于 NSSA 和 Stub 区域的特殊处理。\n- **Router Priority**：接口优先级，参与 DR/BDR 选举，0 表示不参选。\n- **Neighbor**：已知邻居的 Router ID 列表。\n\n## 邻居建立的硬条件（考试高频，现场排错也靠它）\n\n两台路由器要成为邻居，Hello 报文必须逐项匹配，**任一项不匹配就到不了 2-Way**：\n\n1. **Router ID 不冲突**：两端 Router ID 必须不同。\n2. **Hello Interval / RouterDeadInterval 一致**：一个 10s 一个 30s，直接卡在 Init。\n3. **Area ID 一致**：接口属于同一个区域。这是最常见的\"看起来没问题但就是起不来\"的原因之一：接口网段对了但 area 配错。\n4. **认证类型与认证密码一致**（含 key ID、key 内容）。\n5. **区域类型一致**：Stub、NSSA、Normal 必须相同，E-bit 就是用来判断这个的。\n6. **MTU**：严格说 MTU 不匹配不影响到 2-Way，但会影响后续 DD 交互（常见卡在 ExStart/Exchange）。OSPF 默认 DD 报文不填充大包，华为设备上可用 `ospf mtu-enable` 让 DD 带 MTU 值，双方不一致就卡住。\n7. **Network Mask**：广播网和 NBMA 网上必须一致。\n8. **接口不在同一网段/不是同一链路**（组播能到但链路不对）自然不会交换 Hello。\n\n还有几条软条件：接口必须 `ospf enable`（或网段被 network 宣告）、接口状态必须是 Up、二层不能把组播 224.0.0.5 过滤掉。\n\n## 邻居状态机\n\nOSPF 邻居状态是一个单向递进的过程，排错时看状态就知道卡在哪一步：\n\n1. **Down**：还没收到任何 Hello。\n2. **Init**：收到了对方的 Hello，但对方的 Neighbor 列表里没有我。\n3. **2-Way**：双方 Hello 的 Neighbor 列表里都有对方。**这是邻居关系成立的分界线**。广播网上非 DR/BDR 之间会稳定停留在 2-Way，这是正常的，叫 DROther 之间的 2-Way。\n4. **ExStart**：开始协商主从（Master/Slave），用 DD 报文里的 Router ID 和 Interface MTU 比较，大的当 Master。目的是决定 DD 序号谁说了算。\n5. **Exchange**：互发 DD 报文，交换 LSA 头部摘要（LS Type、Link State ID、Advertising Router）。\n6. **Loading**：根据摘要对比自己的 LSDB，缺的发 LSR 请求，对方用 LSU 回应，我发 LSAck 确认。\n7. **Full**：双方 LSDB 完全同步。**只有 Full 才代表数据库同步完成**，此时才可以作为 SPF 计算的输入。\n\n卡点速查：卡 **Init** 查单向可达、认证、Hello 参数；卡 **ExStart/Exchange** 查 MTU、Router ID 冲突、单向链路；卡 **Loading** 查 LSR 收不到回应，通常是网络丢包或 LSDB 超大；卡在 **2-Way** 而在 P2P 链路上，说明有问题（P2P 上邻居应到 Full）。\n\n## DR/BDR 选举\n\n广播网和 NBMA 网上，n 台路由器两两建邻会形成 n(n-1)/2 条邻接关系，泛洪量爆炸。OSPF 引入 DR（Designated Router）和 BDR：所有 DROther 只和 DR/BDR 建立 Full，DR 负责把 LSA 转发给全员。\n\n选举规则：比较接口的 **DR Priority（默认 1，大的优先）**，相同时比较 **Router ID（大的优先）**。选举是**非抢占**的：DR 一旦选出，新加入的高优先级设备不会抢走，除非 DR 失效或接口重置。BDR 同理，DR 失效时 BDR 顶上，再选举新 BDR。\n\n这也是很多人在实验里\"改了优先级怎么没变 DR\"的原因，需要 `reset ospf process` 或重启接口才能重新选举。接口 IP 为 255.255.255.255 的环回口不参与选举。\n\n## Router ID 与 SPF\n\nRouter ID 是 OSPF 域内唯一标识一台路由器的 32 位值，选中顺序：手动 `router id` 配置 > 接口上最高的 Loopback 地址 > 最高的物理接口地址。**Router ID 一旦选定，不随接口地址变化自动更新**，需要重启 OSPF 进程，现场改 IP 后邻居关系莫名其妙断掉，多数是这个原因。\n\nLSDB 同步完成后，每台路由器以自己为根跑 SPF：把 LSDB 里的 Router LSA 和 Network LSA 还原成带权有向图，用 Dijkstra 计算到每个节点的最短路径，得到下一跳和出接口。默认开销是 `reference-bandwidth / interface-bandwidth`，参考带宽默认 100 Mbit/s，千兆以上接口都是 cost 1，所以高带宽组网必须 `bandwidth-reference` 调整。\n\n## 和相邻技术的分工\n\n- OSPF vs RIP：RIP 用跳数、UDP 520、最大 15 跳、收敛慢；OSPF 用带宽代价、IP 89、分层、收敛快。\n- OSPF vs IS-IS：都是链路状态，IS-IS 基于 CLNS 封装、扩展性好，多用于运营商骨干；OSPF 在园区和企业网生态更好。\n- OSPF vs BGP：OSPF 是域内 IGP，负责把网络内部打通；BGP 是 EGP，负责跨 AS 传大量路由和策略控制，通常 BGP 下一跳递归到 OSPF 路由上。",
   "cmds": [
-    "display ospf peer",
-    "display ospf interface",
+    "display ospf peer brief",
+    "display ospf interface GigabitEthernet0/0/0",
+    "display ospf brief",
     "display ospf lsdb",
-    "display ospf routing",
     "display ospf error"
   ],
   "pits": [
-    "Hello/Dead 间隔不一致导致邻居无法建立",
-    "广播网络掩码不一致导致邻居卡在 Init",
-    "MTU 不一致导致邻接卡在 ExStart",
-    "Router ID 冲突导致邻居反复震荡",
-    "认证类型或密码不一致导致 Hello 被丢弃"
+    "改接口 IP 后 Router ID 不会自动更新，需重启 OSPF 进程",
+    "广播网 DROther 之间停在 2-Way 是正常现象，别当故障",
+    "DR 选举非抢占，改优先级需 reset ospf process 才生效",
+    "卡 ExStart/Exchange 优先查 MTU 不一致和 Router ID 冲突",
+    "Hello 与 Dead 定时器、Area ID、认证不一致都会卡在 Init"
   ],
   "qa": [
     {
-      "q": "OSPF 邻居建立的条件有哪些？",
-      "a": "Router ID 不同、Area ID 一致、认证一致、Hello/Dead 间隔一致、网络掩码一致（广播/NBMA）、Stub 标志一致、MTU 一致（影响 DD 交换）。"
+      "q": "OSPF 邻居建立的必要条件有哪些？",
+      "a": "Router ID 不同、Area ID 一致、Hello/Dead 定时器一致、认证一致、区域类型一致、广播网掩码一致；此外接口 Up 并启用 OSPF、组播可达。MTU 不影响 2-Way 但影响 DD 阶段。"
     },
     {
-      "q": "OSPF 邻居状态机有哪些状态？",
-      "a": "Down、Init、2-Way、ExStart、Exchange、Loading、Full。广播网络中非 DR/BDR 之间停留在 2-Way 是正常的。"
+      "q": "为什么广播网上 DROther 之间停留在 2-Way？",
+      "a": "为减少邻接关系数量。DROther 只与 DR/BDR 建立 Full 并交换 LSA，彼此之间只需知道对方存在，不需要同步 LSDB，所以 2-Way 是设计上的正常稳定态。"
     },
     {
-      "q": "DR/BDR 选举规则是什么？",
-      "a": "比较接口 DR 优先级（默认 1，0 不参与），优先级相同比较 Router ID，大者胜出。选举非抢占。"
+      "q": "OSPF 卡在 ExStart 一般是什么原因？",
+      "a": "常见是 MTU 不一致（启用 mtu-enable 后 DD 携带 MTU 并校验）、Router ID 冲突，或单向链路导致主从协商失败。"
     },
     {
-      "q": "为什么 OSPF 需要划分区域？",
-      "a": "减少 LSDB 规模和 SPF 计算频率，把拓扑变化限制在区域内，提高网络稳定性和扩展性。所有非骨干区域必须连接 Area 0。"
+      "q": "Router ID 怎么选？什么时候会变？",
+      "a": "优先级：手动 router id > 最大 Loopback 地址 > 最大物理接口地址。选定后不自动随接口变化，需重启 OSPF 进程或设备。"
     }
   ],
-  "syllabus": "HCIA-Datacom 3.2 OSPF 基础"
+  "syllabus": "HCIA-Datacom OSPF 基础（OSPF 原理与配置：报文类型、邻居状态机、邻居建立条件、DR/BDR 选举）"
 }

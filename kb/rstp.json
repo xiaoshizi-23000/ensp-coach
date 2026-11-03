@@ -7,40 +7,44 @@
     "RSTP",
     "快速生成树",
     "802.1w",
-    "端口角色",
-    "快速收敛",
+    "Alternate Port",
     "Proposal/Agreement",
     "边缘端口"
   ],
-  "one": "RSTP 通过端口角色扩展和 Proposal/Agreement 握手机制，实现秒级收敛的生成树协议。",
-  "analogy": "STP 像老式红绿灯，路口空了半天才换灯；RSTP 像智能交通，一旦发现某条路堵了，立刻通知相邻路口调整，不用等全局计时。而且它把端口分成几种角色：有的专门负责转发（根端口、指定端口），有的备用（Alternate），有的备份（Backup），就像路口有主路、辅路和应急车道，随时能切换。",
-  "body": "## 为什么需要 RSTP\n\nSTP（802.1D）的收敛时间由计时器决定：Listening 15s、Learning 15s，加上 Max Age 20s，拓扑变化后最长要 50 秒才能恢复。在早期网络里还能忍，但现代网络对中断时间敏感，STP 的收敛速度成了硬伤。\n\nRSTP（802.1w）的目标很明确：**在不改变生成树基本计算模型的前提下，把收敛时间从几十秒降到亚秒级**。它做了三件事：\n\n1. 重新定义端口角色，增加 Alternate 和 Backup，让备份路径可以立即接管；\n2. 引入 Proposal/Agreement 握手机制，用协商代替计时器；\n3. 增加边缘端口（Edge Port）概念，接入终端直接转发。\n\nRSTP 完全兼容 STP，运行 RSTP 的端口可以识别并处理 STP BPDU，但为了发挥快速收敛特性，建议全网统一为 RSTP 或 MSTP。\n\n## 端口角色：从三种到五种\n\nSTP 只有根端口（Root Port）、指定端口（Designated Port）、阻塞端口（Blocked Port）三种角色。RSTP 把阻塞端口细分为 **Alternate Port** 和 **Backup Port**，并保留了根端口和指定端口。\n\n| 角色 | 含义 | 转发状态 |\n|------|------|----------|\n| Root Port | 到根桥路径开销最小的端口 | 转发 |\n| Designated Port | 所在网段到根桥路径开销最小的端口 | 转发 |\n| Alternate Port | 根端口的备份，从**其他桥**收到更优 BPDU 而阻塞 | 丢弃 |\n| Backup Port | 指定端口的备份，从**同一桥**的另一个端口收到更优 BPDU 而阻塞 | 丢弃 |\n| Disabled Port | 管理关闭或故障 | 丢弃 |\n\n**Alternate 和 Backup 的区别**是考试和排错的高频点：Alternate 是“别人家的路更好”，备份的是根端口；Backup 是“自己家的另一条路更好”，备份的是指定端口。Backup 端口只在共享介质（如 Hub 连接）或同一桥的两个端口自环时出现，实际网络中很少见。\n\nRSTP 的端口状态也简化了：从 STP 的 Disabled、Blocking、Listening、Learning、Forwarding 五种，缩减为 **Discarding、Learning、Forwarding** 三种。Discarding 合并了 Disabled、Blocking、Listening，因为 RSTP 不再依赖 Listening 计时器。\n\n## BPDU 格式的变化\n\nRSTP 的 BPDU 类型字段为 0x02（STP 为 0x00），版本为 2。它复用了 STP BPDU 的字段，但重新解释了一些位：\n\n- **Flags 字段**：STP 只用了 TCA 和 TC 两位，RSTP 用了全部 8 位，包括 Proposal、Agreement、Learning、Forwarding、Role（2 位）。Role 字段编码端口角色：00 未知、01 Alternate/Backup、10 Root、11 Designated。\n- **Version 1 Length 字段**：固定为 0，表示后面没有 Version 1 的尾部。\n\nRSTP 的 BPDU 发送机制也变了：**每个 Hello Time（默认 2s）由根桥发起，所有指定端口周期性发送**，而不是像 STP 那样只有根桥发、其他桥转发。如果端口连续 3 个 Hello Time（6s）没收到 BPDU，就认为邻居失效，立即触发重新计算。这比 STP 的 Max Age 20s 快得多。\n\n## 快速收敛的核心：Proposal/Agreement 握手\n\nRSTP 的快速收敛主要靠 **Proposal/Agreement 机制**，用于点对点链路。过程如下：\n\n1. 新链路 up 后，两端端口初始为 Designated Discarding。\n2. 上游桥（更靠近根）的指定端口发送 **Proposal 置位**的 BPDU，表示“我想尽快转发，你同意吗？”\n3. 下游桥收到 Proposal 后，把收到 BPDU 的端口设为 **Root Port 并立即进入 Forwarding**（同步操作），同时把所有其他端口设为 **Discarding**（同步），然后回复 **Agreement 置位**的 BPDU。\n4. 上游桥收到 Agreement 后，指定端口立即进入 Forwarding。\n\n这个过程不需要等待任何计时器，一次握手就能让一段链路进入转发。对于树形拓扑，逐级握手，收敛时间与跳数相关，但每跳都是毫秒级。\n\n**同步（Sync）操作**是关键：收到 Proposal 的桥必须先把所有非边缘端口置为 Discarding，防止临时环路，然后再逐级向下握手。如果某个端口是边缘端口，则不参与同步，直接保持转发。\n\n## 边缘端口（Edge Port）\n\n边缘端口是连接终端设备（PC、服务器）的端口，不会产生环路。配置为边缘端口后：\n\n- 链路 up 后立即进入 Forwarding，不经历 Learning 和 Discarding；\n- 不参与生成树计算，不发送 BPDU；\n- 收到 BPDU 后会自动失去边缘端口属性，转为普通 RSTP 端口，防止误接交换机形成环路。\n\n华为设备上通过 `stp edged-port enable` 配置，或者用 `stp edged-port default` 全局默认边缘端口。\n\n## 拓扑变化处理\n\nRSTP 的拓扑变化检测和传播与 STP 不同：\n\n- **检测**：只有非边缘端口从 Forwarding 变为 Discarding 时才认为拓扑变化（STP 是任何状态变化都算）。\n- **传播**：发生变化的桥设置 TC 置位，在**所有根端口和指定端口**上发送 TC BPDU，并且**每个 Hello Time 发送一次，连续发送 3 次**（STP 只发一次，靠 TCA 逐级确认）。\n- **清除表项**：收到 TC BPDU 的桥立即清除除收到端口外的所有端口 MAC 地址表项，而不是像 STP 那样等待 Forward Delay。\n\n这种“泛洪式”TC 传播比 STP 的“逐级确认”更快，但也可能产生更多 TC 报文。\n\n## 与 STP、MSTP 的分工\n\n- **STP**：老协议，收敛慢，现在基本被取代，但需要兼容时仍要理解。\n- **RSTP**：快速收敛，所有 VLAN 共享一棵树，适合小型网络或对 VLAN 划分不敏感的场景。\n- **MSTP**：在 RSTP 基础上支持多实例，每个实例一棵树，实现 VLAN 负载分担，是当前主流。MSTP 的快速收敛机制完全继承 RSTP。\n\n## 设计取舍\n\nRSTP 为了快，做了几个取舍：\n\n1. **依赖点对点链路**：Proposal/Agreement 只在点对点全双工链路上有效，共享介质（半双工）仍用计时器。\n2. **TC 泛洪**：拓扑变化时 TC 报文泛洪全网，可能造成短暂的 MAC 表项震荡，但换来了快速清除。\n3. **边缘端口风险**：如果误把交换机端口配成边缘端口，可能引入环路，所以收到 BPDU 会自动降级。\n\n## 华为 VRP 实现要点\n\n- 默认运行 MSTP，要启用 RSTP 需 `stp mode rstp`。\n- 根桥保护、BPDU 保护、环路保护等特性与 STP 类似，但 RSTP 下行为略有差异。\n- 查看命令：`display stp`、`display stp brief`、`display stp interface`。",
+  "one": "802.1w 定义，用预置备份端口和 P/A 握手把生成树收敛从 30 秒压到秒级",
+  "analogy": "老 STP 像进出每道门都要站岗 30 秒确认没人跟着，慢但稳。RSTP 改成刷门禁卡：每个口平时就记住备用路线，主路一断立刻刷卡进；进门之前先跟门卫打个招呼（Proposal），门卫把其他门先关上表示同意（Agreement），然后大家一起放行。所以快，而且不会因为放行太快绕成一个环。",
+  "body": "## 一、STP 慢在哪，RSTP 快在哪\n\nSTP（802.1D）的收敛时间由计时器主导：Blocking → Listening（15s）→ Learning（15s）→ Forwarding，链路故障到恢复转发动辄 30~50s。慢的根因有三个：\n\n1. **状态迁移靠定时器，不靠事件确认**。没人问过邻居“你现在能不能转发”，只靠自己等够时间。\n2. **端口角色只有 RP/DP，没有预先算好的备份端口**。故障后必须重新选举、重新等待。\n3. **拓扑变化靠 TCN BPDU 逐跳上报到根桥**，根桥再下发 TC/TCA，一来一回延迟大，MAC 表还只能靠 300s 老化。\n\nRSTP（802.1w，后并入 802.1D-2004）的设计目标就是把“等待”换成“协商”，把“事后重算”换成“事前备份”。它没有换算法——仍然是生成树、仍然是比较 BPDU 四元组，但把**状态机、报文、端口角色**三件事全部重构了。\n\n## 二、端口角色：从 2 种到 4 种\n\nSTP 里只有 Root Port 和 Designated Port，其余全是“不转发”。RSTP 明确增加了两种**不转发但有明确语义**的角色：\n\n| 角色 | 含义 | 关键点 |\n|---|---|---|\n| Root Port（RP） | 去根桥最优的端口 | 每台非根桥唯一 |\n| Designated Port（DP） | 所在网段上去根桥更近的一端，负责发 BPDU | 每个网段唯一 |\n| Alternate Port（AP） | 本端从对端收到的是“更优的 DP BPDU”，自己是次优 | 通往根桥的**替代路径**，RP 挂了直接顶上 |\n| Backup Port | 同一台设备上，同网段内自己另一个端口也是 DP，较差的那个 | 只在共享网段（Hub）出现 |\n| Edge Port | 不是转发角色，是端口属性 | 接终端，直接 Forwarding，不参与计算 |\n| Disabled Port | 管理 down | — |\n\n一句话记：**AP 备份“路”，Backup 备份“口”**。P2P 全双工链路上几乎不会出现 Backup Port。\n\n角色仍然由 BPDU 比较得出（Root ID → Root Path Cost → Sender Bridge ID → Sender Port ID）。但 RSTP 的关键差异是：**每个端口无论处于什么状态，都在持续收发和处理 BPDU**。Alternate 端口平时就保存着“如果 RP 挂了，我要变成 RP 所需要的全部参数”，切换时不需要再计算，只需执行。\n\n## 三、端口状态：5 个变 3 个\n\n| STP（802.1D） | RSTP（802.1w） |\n|---|---|\n| Disabled / Blocking / Listening | **Discarding** |\n| Learning | Learning |\n| Forwarding | Forwarding |\n\n为什么能合并？因为 STP 里 Listening 的作用就是“不转发、不学 MAC，但要听 BPDU、参与选举”。RSTP 把“听 BPDU 和参与选举”变成了**所有端口的常驻行为**，不再需要一个专门的过渡状态。状态少了，状态机分支就少了，代码和排错都简单。\n\n## 四、BPDU 的改造\n\n协议版本从 STP 的 version 0（也有称 version 1）变为 **version 2**。字段结构大体没变，真正的变化在 flags 和语义。\n\n### flags 字节被用满\n\nSTP 的 flags 只有 2 bit 有效（TCA、TC），RSTP 把 8 bit 全用上：\n\n| bit | 名称 | 含义 |\n|---|---|---|\n| b0 | TC | 拓扑变化 |\n| b1 | Proposal | 提议，发起 P/A 握手 |\n| b2-b3 | Port Role | 00 未知 / 01 Alternate·Backup / 10 Root / 11 Designated |\n| b4 | Learning | 学习态 |\n| b5 | Forwarding | 转发态 |\n| b6 | Agreement | 同意，回应 Proposal |\n| b7 | TCA | 拓扑变化确认 |\n\n这就是为什么 RSTP 收敛快：**角色、状态、协商意图全部编码进 BPDU 里，对端一次收发就能知道“你是什么角色、你现在转不转发、你要不要我同意”**。STP 时代这些信息只能靠推断和计时。\n\n### 其他关键变化\n\n- **取消 TCN BPDU（type 0x80）**。拓扑变化直接用 TC 置位的配置 BPDU 泛洪，不必先上报根桥再下发。\n- **Message Age 不再逐跳累加**。STP 里 Max Age 20s 是一条“死线”，每跳 +1；RSTP 改为把 Hello 当保活心跳：默认 2s 一个，**连续 3 个 Hello（6s）收不到就老化该 BPDU 并重算**。检测窗口从 20s 缩到 6s，这是快速检测的基础。\n- **每台设备、每个端口自己发 BPDU**，不再严格依赖上游转发（P2P 链路上仍是 DP 发、RP 收，但老化是本地行为）。\n\n## 五、P/A 握手：快速收敛的核心\n\n这是 RSTP 最值钱的机制，只发生在 **P2P 全双工链路**上，且发起端口必须是 **Discarding 状态的 DP**（刚上电、刚接入，或者刚刚从别的角色变成 DP）。\n\n完整过程：\n\n1. 上游设备在 DP 上发送 **Proposal=1** 的 BPDU。\n2. 下游收到后立即做 **sync**：把除“收到 Proposal 的那个口”以外的所有端口全部置为 Discarding。sync 的目的是——我认你这个上游当 RP，那我其他口就不能同时转发，否则两段路径可能同时通，成环。\n3. 对每个被 sync 的端口，下游通过这条链路向上回 **Agreement=1** 的 BPDU 表示“我已经把别人的口都关了”；如果那个口本来就是自己的 DP，它会继续向下游发 Proposal，形成**级联握手**。\n4. 全部端口 sync 完成后，本端口立刻提升为 RP 并进入 **Forwarding**。\n5. 上游收到 Agreement，立刻把自己的 DP 置为 Forwarding。\n\n结果：一条新链路，甚至一整条级联链路，可以在**一个 RTT 内**全部进入转发。注意 edge port 不参与 sync（保持转发），否则接终端会每次断一下。\n\n条件不满足时（共享链路、对端是 STP、强制非 P2P），Proposal 等不到 Agreement，**退回 Learning/Forwarding 定时器机制**——能用，但快不起来。这是“宁可慢也不乱”的取舍。\n\n## 六、链路类型\n\nRSTP 显式区分三种链路类型：\n\n- **Point-to-point**：全双工口，默认自动识别（也可 `stp point-to-point force-true` 强制）。**只有这类能跑 P/A**。\n- **Shared**：半双工、接 Hub，按老方式收敛。\n- **Edge**：`stp edged-port enable`，接终端，上电即 Forwarding，不发 BPDU；**一旦收到 BPDU 就失去边缘属性**（若同时开了 BPDU 保护则直接 error-down）。\n\n设计理由：P/A 的安全前提是“这条链路上只有两个桥”。半双工共享网段里可能有多个桥，sync 无法保证把“别人的口”都关掉，所以只能保守处理。\n\n## 七、拓扑变化处理：从上报式变扩散式\n\nSTP 的流程是：非根桥发现变化 → TCN 逐跳上报 → 根桥置 TC → 下发 TCA/TC → 全网刷新，慢且中心化。\n\nRSTP 让**检测到变化的设备自己当发言人**：\n\n1. 触发条件：一个**非边缘端口从 Forwarding 进入 Discarding**。注意：边缘端口 up/down **不算**拓扑变化。\n2. 动作：把 **TC While timer** 设为 2×Hello（默认 4s）。这段时间内，在所有非边缘、非 Discarding 的端口上发 **TC=1** 的 BPDU，并清除除接收端口外所有端口的 MAC 表项。\n3. 收到 TC 的设备：启动自己的 TC While timer，继续向其他端口泛洪 TC，同样清 MAC。\n4. 泛洪一圈后自然停止（不再有新事件）。\n\n所以 MAC 表刷新在几秒内完成，而不是 300s 老化。代价是 TC 报文会扩散，因此**边缘端口必须配**，否则每台 PC 开关机都触发一次全网刷表，cpu 和泛洪都被拖累。\n\n## 八、故障检测与切换\n\n- **RP 失效**：若存在 Alternate Port 且为 P2P 链路，本端**直接把它提升为 RP 并立即 Forwarding**，不等计时器；同时对其他端口做一次 sync 防止成环。这是 RSTP 最大的提速点——备份路径是预先收敛好的。\n- **DP 失效**：有 Backup Port 的上位（共享网段）；P2P 上通常没有 Backup，需要重新协商。\n- **检测方式**：物理层 down 是瞬时的；链路还在但对端不说话，靠 3 个 Hello（6s）超时老化。\n\n现场“RSTP 收敛还是几十秒”的典型原因就两条：**根端口没有 Alternate**（拓扑本身没冗余，或端口被阻塞成了非 AP），以及**上行链路是半双工/共享导致 P/A 失败**。\n\n## 九、兼容性与部署\n\n- 与 STP 设备互通：RSTP 端口收到 version 0 的 BPDU 后，**该端口退化为 STP 模式**，按 802.1D 计时器工作；同一网段上其他 RSTP 设备也会跟着慢下来。这就是“混跑拖慢全网”的机理。\n- MSTP 兼容 RSTP，端口角色、P/A、TC 机制在 MSTP 里原样保留（MSTP 只是多了实例维度）。\n\n部署要点：\n\n- 接入层下行口 `stp edged-port enable` + `stp bpdu-protection`，防止误接交换机成环。\n- 上行互联口保证全双工，让链路类型判定为 P2P。\n- 根桥用 `stp root primary` 固定，避免优先级抖动引起反复重算。\n\n## 十、设计取舍总结\n\nRSTP 用“**常驻监听 + 预置备份角色 + 显式 P/A 协商 + 扩散式 TC**”四招，把收敛从“计时器驱动”改成“事件驱动”。代价是 BPDU 更频繁（每 2s）、对双工和链路类型有要求、与老设备互通会退化。但它没有改变生成树的正确性边界——环路仍然是靠比较 BPDU 阻塞出来的，P/A 只是把这个已经算好的结果更快地“落地”。",
   "cmds": [
-    "display stp",
     "display stp brief",
-    "display stp interface GigabitEthernet0/0/1",
-    "display stp topology-change"
+    "display stp interface GigabitEthernet 0/0/1",
+    "display stp root",
+    "display stp tc-bpdu statistics",
+    "stp edged-port enable"
   ],
   "pits": [
-    "边缘端口误接交换机可能成环，务必开启 BPDU 保护",
-    "Proposal/Agreement 只在点对点全双工链路生效，半双工仍慢收敛",
-    "Alternate 备份根端口，Backup 备份指定端口，别搞反",
-    "RSTP 的 TC 泛洪可能引起 MAC 表震荡，可配合 TC 保护",
-    "华为默认 MSTP，需手动 stp mode rstp 才启用 RSTP"
+    "边缘端口没配，PC 上下线触发全网 TC 刷表",
+    "半双工或接 Hub 的链路 P/A 失败，退回 15s 老化",
+    "拓扑无冗余时根端口没有 Alternate，快不起来",
+    "与 STP 设备混跑，该端口退化为 802.1D 计时器",
+    "边缘口未开 BPDU 保护，误接交换机直接成环"
   ],
   "qa": [
     {
-      "q": "RSTP 的 Alternate 端口和 Backup 端口有什么区别？",
-      "a": "Alternate 是根端口的备份，从其他桥收到更优 BPDU 而阻塞；Backup 是指定端口的备份，从同一桥的另一个端口收到更优 BPDU 而阻塞。"
+      "q": "RSTP 相比 STP 为什么能快？",
+      "a": "端口角色增加到 RP/DP/AP/Backup，备份路径预先收敛好；状态从 5 个减到 3 个；Proposal/Agreement 握手指把等待变成协商；Hello 作保活，3 个未收到即老化；TC 由检测点直接扩散而非上报根桥。"
     },
     {
-      "q": "RSTP 如何实现快速收敛？",
-      "a": "通过 Proposal/Agreement 握手机制，在点对点链路上用协商代替计时器，同时引入边缘端口和 Alternate 端口实现即时切换。"
+      "q": "Alternate 和 Backup 端口有什么区别？",
+      "a": "Alternate 备份的是“路”，收到的是对端更优的 DP BPDU，提供去根桥的替代路径，P2P 链路上常见；Backup 备份的是“口”，同一台设备在同一共享网段内自己两个 DP 中较差的那个，仅共享链路出现。"
     },
     {
-      "q": "RSTP 的 BPDU 发送机制与 STP 有何不同？",
-      "a": "RSTP 每个 Hello Time 由所有指定端口发送 BPDU，连续 3 个 Hello Time 未收到即认为邻居失效；STP 只有根桥发送，靠 Max Age 计时。"
+      "q": "P/A 握手的前提条件是什么？",
+      "a": "端口为 Discarding 状态的 Designated Port；链路类型为 point-to-point 全双工；对端支持 RSTP。任一不满足则退化为 Learning/Forwarding 定时器收敛。边缘端口不参与 sync。"
+    },
+    {
+      "q": "RSTP 的拓扑变化怎么传播？",
+      "a": "非边缘端口从 Forwarding 进入 Discarding 即触发；设备设置 TC While timer 为 2 倍 Hello，期间在所有非边缘非 Discarding 口发 TC=1 的 BPDU 并清 MAC，收到者继续扩散，一圈后自然停止。"
     }
   ],
-  "syllabus": "HCIP-Datacom 交换技术"
+  "syllabus": "HCIP-Datacom-Advanced Routing & Switching Technology 交换技术 / 生成树协议（RSTP 与 MSTP）"
 }

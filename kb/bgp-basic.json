@@ -4,47 +4,50 @@
   "level": "HCIP",
   "cat": "路由",
   "keys": [
-    "BGP",
-    "邻居关系",
-    "状态机",
-    "FSM",
-    "TCP 179",
+    "BGP FSM",
+    "邻居状态机",
+    "BGP Peer",
     "Idle",
-    "Connect",
     "Active",
     "OpenSent",
     "OpenConfirm",
-    "Established"
+    "Established",
+    "TCP 179"
   ],
-  "one": "BGP 通过 TCP 179 端口建立对等体，并用有限状态机管理邻居的建立、维护与拆除。",
-  "analogy": "BGP 邻居就像两个公司谈合作：先得知道对方地址（TCP 连接），然后互相递名片确认身份（Open 报文），再签合同确认条款（Keepalive），最后才正式做生意（Established）。中间任何一步卡住，合作就谈不成，状态机就是记录谈到哪一步的进度条。",
-  "body": "## 为什么 BGP 需要状态机\n\nBGP 是路径矢量协议，邻居关系是它一切工作的前提。与 IGP 不同，BGP 运行在 TCP 之上（端口 179），因此邻居建立过程涉及 TCP 连接、BGP 报文交换、能力协商等多个阶段。为了精确控制每个阶段的行为、便于排错和定时器管理，BGP 定义了一个有限状态机（FSM），共 6 个状态：Idle、Connect、Active、OpenSent、OpenConfirm、Established。\n\n状态机不仅描述“现在到哪一步”，还决定了在不同状态下收到事件（如 TCP 连接成功、收到 Open 报文、定时器超时）时该做什么动作。理解状态机是 BGP 排错的基础。\n\n## 六个状态详解\n\n### 1. Idle\n\n- **含义**：BGP 初始状态，拒绝任何入向连接，不分配资源。\n- **动作**：收到 Start 事件（如配置邻居、复位邻居）后，初始化资源，发起 TCP 连接，转入 Connect。\n- **注意**：如果邻居一直停留在 Idle，通常是因为没有去往邻居的路由、没有配置邻居、或路由表未收敛。\n\n### 2. Connect\n\n- **含义**：正在等待 TCP 连接建立完成。\n- **动作**：\n  - 如果 TCP 连接成功，发送 Open 报文，转入 OpenSent。\n  - 如果 Connect 重传定时器（默认 32 秒）超时，转入 Active。\n  - 如果连接失败，根据情况回到 Idle 或 Active。\n- **设计取舍**：Connect 状态是主动发起连接，而 Active 状态是监听等待对方连接。两者交替出现，体现了 BGP 对等体双方谁先发起连接都可以的灵活性。\n\n### 3. Active\n\n- **含义**：BGP 正在尝试建立 TCP 连接，但尚未成功。\n- **动作**：\n  - 如果 TCP 连接成功，发送 Open 报文，转入 OpenSent。\n  - 如果 ConnectRetry 定时器超时，回到 Connect 重试。\n  - 如果收到对方发起的 TCP 连接，也会接受并转入 OpenSent。\n- **常见误解**：Active 不是“活跃”的好状态，而是“正在尝试连接但没成功”，通常意味着邻居不可达或端口被阻塞。\n\n### 4. OpenSent\n\n- **含义**：TCP 连接已建立，已发送 Open 报文，等待对方 Open 报文。\n- **动作**：\n  - 收到对方 Open 报文后，检查参数（版本、AS 号、Hold Time、BGP Identifier、能力协商）。\n  - 如果参数正确，发送 Keepalive 报文，转入 OpenConfirm。\n  - 如果参数错误，发送 Notification 报文（错误码如 Open Message Error），断开连接，回到 Idle。\n- **关键检查点**：AS 号必须匹配（eBGP 对端 AS 必须等于配置的 peer AS；iBGP 对端 AS 必须等于本地 AS），Hold Time 协商取较小值，BGP Identifier 不能相同。\n\n### 5. OpenConfirm\n\n- **含义**：已收到对方 Open 报文并发送了 Keepalive，等待对方 Keepalive。\n- **动作**：\n  - 收到对方 Keepalive 后，转入 Established。\n  - 如果 Hold 定时器超时（默认 180 秒），发送 Notification，回到 Idle。\n- **设计目的**：确保双方都完成了 Open 协商并确认对方存活，才进入正式路由交换。\n\n### 6. Established\n\n- **含义**：邻居关系建立成功，可以交换 Update 报文（路由信息）。\n- **动作**：\n  - 定期发送 Keepalive（默认 60 秒，为 Hold Time 的 1/3）。\n  - 收到 Update 报文后处理路由，收到 Keepalive 刷新 Hold 定时器。\n  - 如果 Hold 定时器超时或收到 Notification，断开连接，回到 Idle。\n- **注意**：Established 是唯一可以交换路由的状态。\n\n## 状态迁移图（文字描述）\n\nIdle → (Start) → Connect → (TCP 成功) → OpenSent → (收到 Open) → OpenConfirm → (收到 Keepalive) → Established\n\nConnect ↔ Active 之间根据 TCP 连接结果和定时器来回切换。\n\n任何状态收到 Notification 或错误，都会回到 Idle。\n\n## 报文类型与状态机的关系\n\nBGP 有 4 种基本报文类型（RFC 4271）：\n\n| 报文 | 作用 | 出现状态 |\n|------|------|----------|\n| Open | 协商版本、AS、Hold Time、能力 | OpenSent |\n| Keepalive | 保活，维持邻居 | OpenConfirm、Established |\n| Update | 携带路由信息 | Established |\n| Notification | 报告错误，终止连接 | 任何状态 |\n\n此外还有 Route-refresh（RFC 2918）用于请求重新发送路由，以及 Open 报文中的 Capabilities 字段用于协商多协议扩展（MP-BGP）、路由刷新等能力。\n\n## 定时器\n\n- **ConnectRetry**：默认 32 秒，TCP 连接重试间隔。\n- **Hold Time**：默认 180 秒，协商后取双方较小值。\n- **Keepalive**：默认 60 秒，通常为 Hold Time 的 1/3。\n- **Connect 重传定时器**：在 Connect 状态等待 TCP 连接的超时时间，通常与 ConnectRetry 相关。\n\n## 与相邻技术的分工\n\n- **IGP（OSPF/IS-IS）**：负责域内路由，收敛快，不承载大量路由。BGP 负责域间路由和策略控制。\n- **TCP**：为 BGP 提供可靠传输，BGP 自身不实现重传和确认，简化了协议设计。\n- **路由策略**：BGP 邻居建立后，通过策略控制路由的发布与接收，这是 BGP 的核心价值之一。\n\n## 设计取舍\n\n- **基于 TCP**：好处是可靠传输、简化协议；代价是 TCP 连接可能被中间设备干扰，且 BGP 无法感知 TCP 层的拥塞。\n- **状态机**：好处是行为明确、便于排错；代价是状态多，初学者容易混淆 Active 和 Connect。\n- **Hold Time 协商**：取较小值，保证双方对超时判断一致，避免一方认为邻居已死而另一方还在等待。\n\n## 排错思路\n\n1. 检查邻居状态：`display bgp peer` 查看状态和停留时间。\n2. 如果 Idle：检查路由可达性、邻居配置、ACL 是否放行 TCP 179。\n3. 如果 Active：检查 TCP 连接是否被拒绝，常见于对端未配置邻居、端口未监听、防火墙拦截。\n4. 如果 OpenSent/OpenConfirm：检查 AS 号、Hold Time、BGP Identifier、能力协商是否匹配。\n5. 如果 Established 但路由不通：检查 Update 报文、策略、下一跳可达性。\n\n掌握状态机，就能快速定位 BGP 邻居建立失败的原因。",
+  "one": "BGP 用 TCP 179 建会话，经 6 个状态机收敛到 Established 才换路由",
+  "analogy": "BGP 建邻居像两家公司谈合作签合同：先各自确认对方电话能打通（TCP 握手），再交换名片对上番号（OPEN 报文的 AS 号和 Router ID），然后互发已经收到对方的回执（KEEPALIVE），签完合同才开始真正谈业务（UPDATE 交换路由）。中间任何一步对方信息对不上，直接发一份书面辞退函（NOTIFICATION）撕合同重来。Active 状态别被名字骗了，它是电话还没打通，正在反复拨号，不是已经聊上了。",
+  "body": "## 为什么 BGP 需要一套状态机\n\nBGP 交换的是全网路由，一条错误的路由能直接把半个互联网带偏。所以建立邻居这件事不能像 OSPF 那样发个 Hello 就完事，它必须是一个**双向确认、参数协商、可失败可回退**的过程。状态机就是把这个过程拆成有限个阶段，每个阶段只允许特定的事件进入、特定的报文出现，任何越界一律发 NOTIFICATION 断开重来。好处是排障时你只要看对端停在哪个状态，就知道失败点在哪一环。\n\nBGP 跑在 TCP 之上，这也是它和 IGP 最大的分工差异：可靠传输、重传、流控全甩给 TCP，BGP 自己只关心增量更新和路径属性。代价是它失去了组播发现邻居的能力，邻居必须手工指定（`peer x.x.x.x as-number`），并且底层必须有 IGP 保证 TCP 报文能通。\n\n## 五种报文\n\n所有 BGP 报文共用 19 字节头部：`Marker(16)` + `Length(2)` + `Type(1)`。\n\n| 类型 | 名称 | 作用 | 关键字段 |\n|---|---|---|---|\n| 1 | OPEN | 建邻居时协商参数 | Version(4)、My AS、Hold Time、BGP Identifier、Optional Parameters（Capability） |\n| 2 | UPDATE | 携带路由与路径属性 | Withdrawn Routes、Path Attributes、NLRI |\n| 3 | NOTIFICATION | 报错并断连 | Error Code、Error Subcode、Data |\n| 4 | KEEPALIVE | 保活，只有 19 字节头部 | 无 |\n| 5 | ROUTE-REFRESH | 请求重发路由 | AFI、SAFI |\n\nOPEN 报文里的 Optional Parameters 才是真正的重头戏：MP-BGP（AFI/SAFI 能力）、Route Refresh、4 字节 AS Number、Graceful Restart、Add-Path 全在这里协商。**只要一方不支持、另一方又要求必须支持，就直接谈崩**。这也是为什么 IPv6 邻居必须在地址族视图下显式激活 `peer x.x.x.x enable`，否则能力协商里根本没有对应 AFI/SAFI。\n\n一个空 UPDATE（只带 19+4 字节头、无撤销无属性）是特殊的 **End-of-RIB** 标记，告诉对端“我这一轮的路由发完了”，配合 GR 做收敛判断。\n\n## 六个状态逐一拆解\n\n### Idle\n\n初始状态，也是故障恢复后的落地状态。此状态**拒绝所有入方向的 TCP 连接**，只等一个 Start 事件（配了邻居、`reset bgp`、路由策略变化触发重连）。收到 Start 后启动 ConnectRetry 定时器，发起 TCP 连接，转 Connect。\n\n如果是因为收到 NOTIFICATION 或校验失败退回来的，会在这里停留一段时间做振荡抑制，避免一条抖动路由把 CPU 打满。\n\n### Connect\n\n等 TCP 三次握手。三种走向：\n\n- 握手成功 → 发 OPEN，清 ConnectRetry，转 OpenSent；\n- ConnectRetry 超时（VRP 默认 32 秒）→ 重启定时器，重发 SYN；\n- TCP 连接被拒/失败 → 转 Active。\n\n注意：如果双方同时主动发起连接，会产生两条 TCP 连接，BGP 通过比较 Router ID 大小来裁掉一条，保留 Router ID 大的那一侧发起的连接。\n\n### Active\n\n**这是最容易误解的状态**。Active 不是“活跃、已建立”，而是“主动尝试建立 TCP 但失败了，正在反复重试”。它的存在是因为 RFC 1771 把“发起连接”这个动作定义为 active。看到邻居停在 Active，问题一定在 TCP 层：路由不可达、179 端口被 ACL/防火墙拦截、对端没配这个邻居、或者 `ebgp-max-hop` 不够导致 TTL 归零。\n\n一旦 TCP 握手成功，同样发 OPEN 转 OpenSent。\n\n### OpenSent\n\n本端 OPEN 已发出，等对端 OPEN。收到后逐项校验：\n\n- Version 必须是 4；\n- My AS 是否与本地配置的 `peer as-number` 一致；\n- Hold Time 取双方较小值，且必须是 0 或 ≥ 3 秒，否则报错；\n- BGP Identifier 必须非 0、非 255.255.255.255，且**不能与本端 Router ID 相同**；\n- Optional Parameters 里的能力集是否冲突；\n- 若配了 MD5 认证，TCP 层就要校验通过，否则连 OPEN 都收不到。\n\n任何一项不过，发 NOTIFICATION（Error Code 2，Open Message Error）后退回 Idle。全过则回一个 KEEPALIVE，转 OpenConfirm。此时双方**还没交换任何路由**，所以 OpenSent 卡住时去看路由表是没意义的。\n\n### OpenConfirm\n\n只等一件事：对端 KEEPALIVE。收到即转 Established。期间 Hold 定时器在跑，超时或收到 NOTIFICATION 都退回 Idle。这里卡住通常提示对端在 OpenSent 就认为本端参数不合规，问题在对端日志里。\n\n### Established\n\n唯一真正交换 UPDATE 的状态。收到 KEEPALIVE 重置 Hold 定时器；收到 UPDATE 时校验路径属性（AS_PATH 格式、Next_Hop 合法性、属性标志位），出错就发 NOTIFICATION 断连。\n\n状态进到 Established 但路由表是空的，说明问题已经不在邻居层，而在策略层或下一跳层，排查方向要整体切换。\n\n## 定时器与协商\n\n| 定时器 | VRP 默认 | 说明 |\n|---|---|---|\n| ConnectRetry | 32 s | TCP 连接重试间隔 |\n| Hold Time | 180 s | OPEN 中协商，取双方较小值，0 表示不启用 |\n| Keepalive | Hold/3 = 60 s | 实际发送间隔 |\n\nHold Time 的取值是典型的工程折中：太小，一次丢包风暴就断邻居，路由全撤再重收敛；太大，对端已经死掉却要等 3 分钟才感知，黑洞流量一路吞下去。180/60 是业界跑了几十年的经验值，链路质量差的场景可以调，但要两端对称考虑。\n\n## IBGP 与 EBGP 的邻居差异\n\n| 维度 | EBGP | IBGP |\n|---|---|---|\n| 默认 TTL | 1（需直连，否则配 `ebgp-max-hop`） | 255 |\n| AS_PATH | 追加本 AS | 不追加 |\n| Next_Hop | 改为自身出接口地址 | 默认保持不变（需 `peer next-hop-local`） |\n| 路由传递 | 正常向外发 | 从 IBGP 学到的**不再传给其他 IBGP**（水平分割） |\n\nIBGP 水平分割的根因是：AS 内部没有 AS_PATH 可依赖，如果 IBGP 之间随意转发，一条路由就能在 AS 内形成环。代价是 AS 内必须**全互联**，N 台路由器就是 N(N-1)/2 条会话，规模一大就不可维护，于是才有了 Route Reflector 和 Confederation 两种工程解。\n\n另一个常见坑：从 EBGP 学到的路由传给 IBGP 时 Next_Hop 默认不改，如果中间的 IBGP 邻居没有去往那个外部下一跳的路由，路由进表也是 invalid。要么 `peer next-hop-local`，要么保证 AS 内 IGP 覆盖外部地址。\n\n## 设计上的取舍\n\n**用 TCP 而不是自建可靠传输**：省掉重传、序号、窗口、拥塞控制整套实现，BGP 只做增量。代价是建邻居必须手工指定、必须依赖 IGP 提供底层可达性、无法用组播自动发现邻居。\n\n**用 TCP 而不是 UDP**：BGP 路由量大、会话长，丢一条 UPDATE 就可能造成路由黑洞，可靠性优先于开销。\n\n**参数校验严格到偏执**：Router ID 相同、AS 号不匹配、能力冲突一律断开，因为放过去造成的后果远比断邻居严重。\n\n**分阶段而非一步到位**：把“能连通”“参数对得上”“收到确认”拆成三步，就是为了让失败点可以被外部观测，这正是状态机最重要的产品价值。",
   "cmds": [
     "display bgp peer",
     "display bgp peer verbose",
     "display bgp routing-table",
-    "display tcp status"
+    "display bgp error",
+    "reset bgp all"
   ],
   "pits": [
-    "Active 状态表示 TCP 连接未建立，不是“活跃”的好状态。",
-    "eBGP 邻居的 AS 号必须与对端配置的 peer AS 一致，否则 Open 报文被拒。",
-    "Hold Time 协商取较小值，两端不一致时以小的为准。",
-    "BGP Identifier 不能相同，否则邻居无法建立。",
-    "中间设备可能拦截 TCP 179，导致一直卡在 Connect/Active。"
+    "Active 状态是 TCP 没建起来，别去看路由表",
+    "Router ID 冲突会让邻居停在 OpenSent 反复断连",
+    "IBGP 学来的路由下一跳不可达，路由进表也是 invalid",
+    "两端 Hold Time 取小值，配不一致时以小的为准",
+    "EBGP 非直连必须配 ebgp-max-hop，否则 TTL 归零停 Active"
   ],
   "qa": [
     {
-      "q": "BGP 邻居建立有哪几个状态？",
-      "a": "Idle、Connect、Active、OpenSent、OpenConfirm、Established。Idle 初始，Connect 等待 TCP，Active 尝试连接，OpenSent 已发 Open，OpenConfirm 等待 Keepalive，Established 可交换路由。"
+      "q": "BGP 邻居建立经历哪几个状态？",
+      "a": "Idle → Connect → OpenSent → OpenConfirm → Established，Connect 失败时进入 Active 重试。Idle 收 Start 发起连接，OpenSent 校验 OPEN 参数，OpenConfirm 等 KEEPALIVE，Established 后才交换 UPDATE。"
     },
     {
-      "q": "BGP 邻居停留在 Active 状态可能是什么原因？",
-      "a": "通常是对端未配置邻居、TCP 179 被 ACL/防火墙拦截、或去往邻居的路由不可达，导致 TCP 连接无法建立。"
+      "q": "为什么 BGP 用 TCP，OSPF 不用？",
+      "a": "BGP 路由量大、会话长时间存在，需要可靠有序传输与流控，交给 TCP 可省掉自研重传和窗口机制。OSPF 是链路状态、周期性泛洪、面向单区域，用 IP 协议号 89 自己实现更轻量。"
     },
     {
-      "q": "BGP 的 Hold Time 和 Keepalive 有什么关系？",
-      "a": "Keepalive 默认是 Hold Time 的 1/3，Hold Time 默认 180 秒，Keepalive 60 秒。Hold Time 协商取双方较小值。"
+      "q": "IBGP 为什么要求全互联？",
+      "a": "AS 内没有 AS_PATH 可用来防环，BGP 规定从 IBGP 学到的路由不再通告给其他 IBGP，形成水平分割。为保证全 AS 都能学到，只能两两建立会话，规模大时用 RR 或联盟替代。"
+    },
+    {
+      "q": "邻居停在 Active 怎么查？",
+      "a": "属 TCP 层问题。检查到对端是否路由可达、179 端口是否被 ACL 或防火墙拦截、对端是否配置了本端邻居、EBGP 非直连是否配了 ebgp-max-hop，再看两端认证是否一致。"
     }
   ],
-  "syllabus": "HCIP-Datacom 路由技术"
+  "syllabus": "HCIP-Datacom 路由技术（BGP 邻居建立与状态机）"
 }

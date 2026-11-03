@@ -1,0 +1,55 @@
+{
+  "id": "super-vlan",
+  "title": "Super VLAN 与 MUX VLAN",
+  "level": "HCIP",
+  "cat": "交换",
+  "keys": [
+    "Super VLAN",
+    "VLAN Aggregation",
+    "VLAN 聚合",
+    "MUX VLAN",
+    "Multiplex VLAN",
+    "Principal VLAN",
+    "Subordinate VLAN",
+    " isolate VLAN",
+    "Group VLAN",
+    "ARP Proxy",
+    "VLAN 复用"
+  ],
+  "one": "让多个 VLAN 共享一个网段和一个三层接口的二层隔离与地址复用技术。",
+  "analogy": "把 Super VLAN 想成一栋写字楼：整栋楼共用一个门牌号（一个网段和网关），但每家公司内部的门禁只让自己人进，隔壁公司的人进不来。物业（三层网关）在门口统一收发快递，谁家快递由物业代收再转交，所以各家公司不用各占一个门牌号。MUX VLAN 则是同一个门牌号下的更严格的门禁分级：老板可以串所有门（Principal），部门内部互通（Group），访客只能见前台（Separate）。",
+  "body": "## 为什么需要它\n\n园区网里最常见的地址规划困境是：一个部门要独立广播域，就要一个 VLAN；一个 VLAN 按规范要占一个 IP 子网加一个三层接口（VLANIF）。于是「部门多、人少」的场景——每层楼的几个会议室、每个租户的两三个工位、每个小办事处——会迅速把子网吃光。一个 /24 只放 5 台机器，地址利用率不到 2%，VLANIF 数量也爆炸，路由表里一堆直连网段。\n\nSuper VLAN（华为文档里也叫 VLAN Aggregation，VLAN 聚合）就是解决这个矛盾的：**二层仍然按 VLAN 隔离广播域，但三层共用一个网段和一个 VLANIF**。代价是二层隔离的 VLAN 之间要通信必须走三层，且必须依赖 ARP Proxy。\n\nMUX VLAN（Multiplex VLAN）解决的是另一个问题：**同一个网段内还要再分级做二层隔离**，典型是运营商/企业接入里的「同网段内用户互访控制」——小区宽带用户同网段但不能互访，但都要能访问网关和服务器。\n\n## Super VLAN 的组成\n\n三个角色必须分清楚：\n\n| 角色 | 说明 |\n|---|---|\n| Super VLAN | 只承载三层功能，**不能有物理成员口**，其 VLANIF 是所有 Sub VLAN 的公共网关 |\n| Sub VLAN | 真正的二层广播域，物理口只能加入 Sub VLAN，与 Super VLAN 是「一对多」映射关系 |\n| VLANIF（Super） | 唯一的网关接口，Sub VLAN 里主机的默认网关都指向它 |\n\n关键约束：**Super VLAN 里不能有物理接口**，Sub VLAN 不能单独配 VLANIF。两者用 `aggregate-vlan` / `access-vlan` 建立映射。一个 Super VLAN 可以聚合最多 4094 个 Sub VLAN（实际受芯片规格限制，通常远小于此）。\n\n### 报文转发过程\n\n以 Sub VLAN 10 的主机 A（10.1.1.2/24）访问 Sub VLAN 20 的主机 B（10.1.1.3/24）为例：\n\n1. A 发现目的与自己同网段，直接 ARP 请求 10.1.1.3。\n2. 二层广播被限制在 Sub VLAN 10 内，B 收不到。\n3. 交换机在 Super VLAN 的 VLANIF 上**代答 ARP**：以网关 MAC 回应 ARP Reply。这就是 Super VLAN 必须开 ARP Proxy 的原因——`arp-proxy enable` 在 Super VLAN 的 VLANIF 上配置，不开就完全不通。\n4. A 把帧发给网关 MAC，交换机三层查表，发现目的 10.1.1.3 是自己某个 Sub VLAN 内的直连地址，直接二层封装转发到 Sub VLAN 20。\n5. 流量路径是 A → 交换机三层 → B，虽然同网段，但实际走了三层转发。\n\n访问外网时同理：A 的网关就是 Super VLANIF，正常三层转发出去。**所以从主机视角看，全网就是「一个网段 + 一个网关」，它完全不知道下面被切成了多个 VLAN。**\n\n### ARP Proxy 与表项\n\nSuper VLAN 的 VLANIF 会维护所有 Sub VLAN 内主机的 ARP 表项，并统一以 Super VLANIF 的 MAC 应答。需要注意：\n\n- 华为设备在 Super VLAN 场景下，VLANIF 的 ARP 学习是基于 Sub VLAN 内实际收到的 ARP 报文，表项里会记录主机所属的 Sub VLAN 信息，用于后续二层封装。\n- 有 `arp-proxy enable` 才能代答；某些版本还有 `arp-proxy inter-sub-vlan-proxy enable` 细化控制 Sub VLAN 间是否代理。\n- ARP 表规模 = 所有 Sub VLAN 主机总数，规划时要评估规格。\n\n### 为什么设计成「不能有物理口」\n\n如果把物理口放进 Super VLAN，它就成了一个普通 VLAN，Sub VLAN 和 Super VLAN 的广播域关系会混乱：Super VLAN 的广播要不要泛洪到 Sub VLAN？泛洪了就破坏了隔离，不泛洪 Super VLAN 自己的口又收不到。干脆禁止，让 Super VLAN 纯粹做三层载体。这是一个典型的**功能拆分换取实现简单**的取舍。\n\n### 与 VLANIF / 普通 VLAN 的分工\n\n- 普通 VLAN：一个 VLAN 一个子网一个 VLANIF，隔离与三层一一对应。\n- Super VLAN：二层多对一映射到三层，省地址省接口，代价是同网段内互访要过三层，且有 ARP Proxy 依赖。\n- 路由口 / VLAN 终结：Sub VLAN 不适合跨设备再做聚合，Super VLAN 是**单机特性**，不支持跨设备协商。\n\n### Super VLAN 的限制清单（现场最容易忽略）\n\n- Super VLAN 内不能配置物理接口，Sub VLAN 不能配 VLANIF。\n- 不支持 DHCP Snooping 的部分特性组合、不支持在 Sub VLAN 上做大量 ACL 三层过滤（要在 Super VLANIF 上做）。\n- 广播报文不会跨 Sub VLAN 泛洪，所以依赖广播的协议（如早期 NetBIOS 名字解析、部分 IP 电话注册广播）会失效。\n- 组播在 Super VLAN 场景下需要额外注意，IGMP Snooping 按 Sub VLAN 生效。\n- Stack / CSS 场景下 Sub VLAN 可以分布在成员设备上，但 ARP 代理仍由主控统一处理。\n\n## MUX VLAN 的组成\n\nMUX VLAN 在**同一个 VLAN / 网段内**再做访问分级，角色是：\n\n| 角色 | 说明 | 互通规则 |\n|---|---|---|\n| Principal VLAN | 主 VLAN，所有流量都能通 | 可与所有从 VLAN 互通 |\n| Group VLAN（互通型从 VLAN） | 组内互通 | 组内成员互通、可访问 Principal、**不能访问其他 Group / Separate** |\n| Separate VLAN（隔离型从 VLAN） | 完全隔离 | 只能访问 Principal，成员之间也**不能互通** |\n\n配置模型：先建 Principal VLAN，再在 Principal VLAN 视图下用 `subordinate group` / `subordinate separate` 绑定从 VLAN。接口用 `port mux-vlan` 加入 Principal，用 `port subordinate-vlan group|separate` 指定从角色。\n\n### MUX VLAN 的转发机制\n\nMUX VLAN 本质是**在同一个广播域内按端口角色做转发剪枝**：\n\n- 上行方向（从 VLAN → Principal）：允许。\n- Principal → 任意从 VLAN：允许。\n- Group 内成员互访：允许（同 VLAN 内正常二层转发）。\n- Group A → Group B：禁止，交换机在入方向直接丢弃，不会泛洪。\n- Separate 内部互访：禁止；Separate → 其他从 VLAN：禁止。\n\n因为都在同一个网段，主机 ARP 请求对方时会收到 ARP Request 泛洪，但响应报文被丢弃，表现为**能 ping 通网关但 ping 不通同网段邻居**。这一点和 Super VLAN 恰好相反：MUX VLAN 不做 ARP Proxy，它是靠丢弃实现的隔离。\n\n### 两者的关键区别\n\n| 维度 | Super VLAN | MUX VLAN |\n|---|---|---|\n| 解决的问题 | 多 VLAN 共用一个网段/网关，省地址 | 同网段内分级隔离 |\n| 是否跨网段 | Sub VLAN 之间逻辑上是同网段但走三层 | 全部同一网段，二层转发 |\n| 依赖 | ARP Proxy（必须） | 无，纯转发剪枝 |\n| 隔离粒度 | VLAN 之间 | VLAN 之间 + 端口角色 |\n| 三层接口 | 只有 Super VLANIF | 只有 Principal 的 VLANIF |\n| 典型场景 | 小部门/会议室/多租户地址复用 | 酒店、宿舍、园区访客 |\n\n### 能不能一起用\n\n可以在同一台设备上并存但**不能叠加在同一组 VLAN 上**：一个 VLAN 不能既是某 Super VLAN 的 Sub VLAN，又是某 MUX VLAN 的从 VLAN。实际规划里通常是不同区域分别用：办公区用 Super VLAN 省地址，公寓/宿舍区用 MUX VLAN 做用户隔离。\n\n### 设计取舍总结\n\nSuper VLAN 用「三层代理」换取地址和接口的节省，代价是引入 ARP Proxy 依赖、同网段互访变成三层转发（增加一跳处理、影响时延和 ACL 位置）、广播域被切断（依赖广播的协议失效）。MUX VLAN 用「转发剪枝」换取同网段内的精细隔离，代价是接口角色配置必须逐口指定、主 VLAN 单点承载三层、隔离关系是静态的不能动态调整。\n\n选择判断标准很简单：**要省地址就用 Super VLAN，要控互访就用 MUX VLAN，两个都要就分区域用。**",
+  "cmds": [
+    "display vlan",
+    "display vlan aggregate-vlan",
+    "display mux-vlan",
+    "display arp all",
+    "display interface vlanif"
+  ],
+  "pits": [
+    "Super VLANIF 上忘配 arp-proxy enable，同网段跨 Sub VLAN 完全不通",
+    "把物理口划进 Super VLAN，配置直接报错或行为异常",
+    "Sub VLAN 里再配 VLANIF，造成网关冲突、路由混乱",
+    "MUX VLAN 中 Separate 口 ping 不通同 VLAN 邻居，误判为链路故障",
+    "Super VLAN 规模大时 ARP 表超规格，表现为部分主机时通时断"
+  ],
+  "qa": [
+    {
+      "q": "Super VLAN 下两个 Sub VLAN 的主机同网段互访，报文实际走几层转发？",
+      "a": "走三层。ARP 由 Super VLANIF 代理应答，主机把帧发给网关 MAC，交换机查三层表后重新二层封装转发到目的 Sub VLAN。"
+    },
+    {
+      "q": "Super VLAN 为什么要求 Super VLANIF 开启 ARP Proxy？",
+      "a": "Sub VLAN 广播被隔离，ARP Request 无法到达目的 Sub VLAN，只有网关代答 ARP Reply，主机才能学到网关 MAC 并把流量交给三层。"
+    },
+    {
+      "q": "MUX VLAN 三种角色分别能和谁通信？",
+      "a": "Principal 与所有从 VLAN 互通；Group 组内互通并可访问 Principal，不能访问其他 Group 和 Separate；Separate 只能访问 Principal，成员之间也不通。"
+    },
+    {
+      "q": "Super VLAN 和 MUX VLAN 最本质的区别？",
+      "a": "Super VLAN 是二层多 VLAN 映射到同一三层网关、靠 ARP Proxy 打通；MUX VLAN 是同一网段内按端口角色做转发剪枝隔离，不涉及三层代理。"
+    }
+  ],
+  "syllabus": "HCIP-Datacom 交换技术（VLAN 高级特性：Super VLAN / MUX VLAN）"
+}

@@ -4,43 +4,51 @@
   "level": "HCIP",
   "cat": "路由",
   "keys": [
-    "Stub Area",
-    "Totally Stubby Area",
+    "Stub 区域",
     "NSSA",
+    "Totally Stub",
     "Totally NSSA",
-    "LSA Type 7",
-    "区域类型"
+    "Type-7 LSA",
+    "特殊区域"
   ],
-  "one": "通过限制 LSA 泛洪种类来压缩 LSDB 与路由规模的区域分类机制。",
-  "analogy": "一个公司有总部和一堆分部。普通区域像什么都往群里发的同事，消息全、但群文件越堆越多。Stub 区域像只收总部红头文件的部门，分部内部的小道消息不许外传，也不许外面乱七八糟的广告进来。Totally Stubby 更狠，连总部各科室的明细都不发，只给一张“去哪都先找总部”的默认路线。NSSA 则是那种自己偷偷接了点外部私活、又不想让私活污染总部的部门，得单独开个口子报备。",
-  "body": "## 为什么需要区域类型\n\nOSPF 是链路状态协议，同一区域内所有路由器必须维护完全一致的 LSDB。区域划分本身已经把拓扑信息限制在区域内，但**外部路由（AS-External LSA，Type 5）默认会在整个 AS 内泛洪**，而且 Type 5 不随区域边界终止。一个末梢区域里可能只有两台低端设备、几条链路，却要装下整个骨干域成千上万条外部路由，内存和 SPF 计算都是浪费。\n\n区域类型的本质是：**在区域边界（ABR）上做 LSA 过滤与替代**，用一条默认路由换取 LSDB 的瘦身。设计取舍很明确——牺牲末梢区域对外部明细路径的可达性（改为默认路由），换取设备资源与收敛稳定性。\n\n## 四类特殊区域与 LSA 过滤矩阵\n\n先回顾相关 LSA：\n\n| LSA | 名称 | 产生者 | 泛洪范围 |\n|---|---|---|---|\n| Type 1 | Router LSA | 每台路由器 | 本区域 |\n| Type 2 | Network LSA | DR | 本区域 |\n| Type 3 | Summary LSA | ABR | 区域间（除 Totally 类被过滤） |\n| Type 4 | ASBR-Summary LSA | ABR | 指向 ASBR 的区域间 |\n| Type 5 | AS-External LSA | ASBR | 整个 AS（Stub/NSSA 内被阻断） |\n| Type 7 | NSSA-External LSA | NSSA 内 ASBR | 仅 NSSA 内，由 ABR 转换 |\n\n各区域类型允许/阻断的 LSA：\n\n| 区域类型 | Type 3 | Type 4/5 | Type 7 | 默认路由来源 |\n|---|---|---|---|---|\n| 普通区域 | 允许 | 允许 | — | 无 |\n| Stub | 允许 | 阻断 | — | ABR 注入 Type 3 默认 |\n| Totally Stubby | 阻断（仅留默认） | 阻断 | — | ABR 注入 Type 3 默认 |\n| NSSA | 允许 | 阻断 | 允许 | ABR 注入 Type 7 默认（可配） |\n| Totally NSSA | 阻断（仅留默认） | 阻断 | 允许 | ABR 注入 Type 3 + Type 7 默认 |\n\n注意 Totally 系列不是 OSPF 标准区域类型，是 Cisco 提出、华为 VRP 通过 `stub no-summary` / `nssa no-summary` 实现的扩展，本质是在 ABR 上额外过滤 Type 3。\n\n## Stub 区域机制\n\n配置要求：区域内**所有**路由器（含 ABR）都必须 `stub`，否则邻居关系建立不起来——Hello 报文的 E-bit（External Routing Capability）必须匹配。E-bit 置 0 表示该接口不接收也不产生 Type 5。\n\n行为：\n- 区域内不允许存在 ASBR（不能引入外部路由），因为 Type 5 被阻断，引入也没意义。\n- ABR 向 Stub 区域内注入一条 Type 3 的默认路由（0.0.0.0/0），Cost 通常为 1（可配）。\n- 区域间路由（Type 3）正常泛洪，所以 Stub 区域仍能看到其他区域的明细路由。\n\n适用场景：末梢区域只有一条出口通往骨干，内部路由器不需要知道外部明细。\n\n## Totally Stubby 区域\n\n在 Stub 基础上，ABR 额外过滤 Type 3（默认路由除外），只向区域内下发一条 Type 3 默认路由。区域内路由器 LSDB 极简，只有本区域 Type 1/2 加一条默认。\n\n代价：区域内路由器失去区域间路径的明细，所有跨区域流量都走 ABR，可能产生次优路径。所以只适合**单出口**的末梢。\n\n## NSSA 区域机制\n\nStub 的硬伤是禁止 ASBR。但现实中末梢区域常常自己接了外部网络（比如分部接了一条 Internet 链路、或从其他协议引入路由），需要把外部路由通告进 OSPF，又不能让它以 Type 5 泛洪到整个 AS。NSSA（Not-So-Stubby Area，RFC 3101）就是为此设计。\n\n关键机制：\n\n1. **Type 7 LSA**：NSSA 内的 ASBR 引入外部路由时产生 Type 7，只在 NSSA 内泛洪。Type 7 报文头有 P-bit（Propagate bit），置 1 表示希望被转换后向 NSSA 外泛洪。\n2. **Type 7 → Type 5 转换**：NSSA 的 ABR 收到 P-bit=1 的 Type 7 后，将其转换为 Type 5 泛洪到其他区域。转换时把 Type 7 的 Forwarding Address 填入 Type 5。**只有 NSSA 的 ABR 且是转换路由器（ translator）才做转换**，多 ABR 场景下通过 Router ID 最大者当选 translator（可手工指定）。\n3. **P-bit 清零条件**：Type 7 在 NSSA 内泛洪时，若经过的 ABR 发现 Forwarding Address 不可达或该路由不应外泄，会清 P-bit，之后不再转换。\n4. **默认路由**：NSSA 的 ABR 默认不自动注入默认路由，需要 `default-route-advertise` 手工配置（产生 Type 7 默认）；而 Stub 是自动的。这是现场最常搞混的一点。\n5. **E-bit 与 N-bit**：NSSA 的 Hello 中 E-bit=0、N-bit=1，两者必须匹配才能建邻居。\n\n## Totally NSSA\n\n在 NSSA 基础上 ABR 过滤 Type 3（默认除外），同时保留 Type 7 能力。区域内 LSDB = 本区域 Type 1/2 + Type 7 + 一条 Type 3 默认。适合“单出口 + 自带外部引入”的末梢。\n\n## 设计取舍与选型\n\n- 末梢无外部引入 → Stub；末梢单出口且想极致瘦身 → Totally Stubby。\n- 末梢有外部引入 → NSSA；再加瘦身 → Totally NSSA。\n- 区域类型是**区域属性**，不是接口属性，区域内所有路由器必须一致配置，否则邻居卡在 ExStart/Exchange 或直接 Down。\n- 特殊区域会阻断明细，排错时先确认默认路由是否被正确注入，否则表现为“能到 ABR 但到不了远端”。\n- 虚拟链路（Virtual Link）不能穿越 Stub/NSSA 区域，因为其依赖骨干区域的 Type 1 泛洪。\n\n## 与相邻技术的分工\n\n区域类型解决的是**LSDB 规模**问题；路由聚合（`abr-summary`、`asbr-summary`）解决的是**路由条目数量**问题；两者常配合使用。而路由过滤（filter-policy）作用于路由表而非 LSDB，不能替代区域类型。",
+  "one": "让末梢区域用一条默认路由替代大量 LSA，以缩小 LSDB 的特殊区域设计",
+  "analogy": "小区门口设了个快递驿站：外面所有快递（外部路由）一律不许送进楼里，驿站只给你一个电话——「什么都问他」（默认路由）。这叫 Stub。再狠一点，连其他楼栋的详细门牌号（区域间明细路由）也不贴了，只留那个电话，这就是 Totally Stub。NSSA 则是小区里自己开了个小卖部，它有自己的进货单（Type-7），进货单只在小区里传，由驿站统一换成对外的正式快递单（Type-5）再发出去。",
+  "body": "# 为什么需要区域类型\n\nOSPF 是链路状态协议，同一区域内的每台路由器都要维护一份完全一致的 LSDB，并独立跑 SPF。区域（area）本身已经解决了 Type-1（Router LSA）、Type-2（Network LSA）的洪泛范围问题——拓扑不出区。但另外三类 LSA 是跨区甚至全域泛洪的：\n\n- **Type-3（Network Summary LSA）**：ABR 把本区域的明细路由一条条通告给其他区域。区域间路由有多少条，Type-3 就有多少条。\n- **Type-4（ASBR Summary LSA）**：告诉其他区域「ASBR 在这里」，为 Type-5 的递归服务。\n- **Type-5（AS External LSA）**：ASBR 引入的外部路由，泛洪到整个 AS（Stub/NSSA 除外），一条外部前缀一条 LSA。\n\n问题就出在这里：一个只有单出口的末梢区域，里面的路由器对所有非本区域的目的地都走同一个出口，它根本不需要知道外面那几千条外部明细。但 OSPF 默认是把 Type-5 无条件泛洪到全 AS 的，末梢区域的路由器被迫接收几千条跟自己无关的 LSA，LSDB 被撑大，每次外部路由变化还要重算路由表。\n\n**特殊区域（Stub / NSSA）的本质就是：在 ABR 上把这些对区域内没必要的 LSA 挡在区域外，用一条默认路由顶替。**设计上是一次明确的取舍——牺牲明细路由的可见性，换取 LSDB 规模、内存、CPU 和收敛稳定性。代价是区域内不能有 ASBR（Stub），或者外部路由只能以 Type-7 形式存在（NSSA），并且区域内所有路由器必须对「这是个特殊区域」达成一致。\n\n还有一点常被忽略：**特殊区域是单向屏蔽**。它只挡外面的 LSA 进来，不挡自己出去。Stub 区域内的 Type-1/2 照样被 ABR 汇总成 Type-3 通告给其他区域，其他区域看这个末梢区域的路由是完全正常的。\n\n# 区域能力靠 Hello 协商\n\n区域是不是 Stub/NSSA，不写在 LSA 里，而是体现在 Hello 报文的 **Options 字段**的两个比特上：\n\n- **E-bit（ExternalRouting）**：置 1 表示本区域允许 Type-5 泛洪。Stub 和 NSSA 区域该位为 0。\n- **N-bit（NSSA）**：置 1 表示本区域是 NSSA，能处理 Type-7。Stub 区域该位为 0。\n\n这两个位是**按接口所在区域**设置的。所以一台多区域 ABR，朝骨干区域发的 Hello 里 E=1，朝 Stub 区域发的 Hello 里 E=0，这完全正常。\n\n接收方收到 Hello 后会拿 Options 里的 E/N 位跟本接口所属区域的配置比对，**不一致直接丢弃 Hello，邻居建不起来**——你看到的现象是邻居卡在 Down/Init，日志里往往没有明确提示。这是现场最高频的故障之一：区域里有一台路由器忘了配 `stub`。\n\n# LSA 类型与泛洪范围速查\n\n| 类型 | 名称 | 产生者 | 泛洪范围 | 被哪些区域阻断 |\n|---|---|---|---|---|\n| Type-1 | Router LSA | 每台路由器 | 本区域 | 不跨区 |\n| Type-2 | Network LSA | DR | 本区域 | 不跨区 |\n| Type-3 | Network Summary | ABR | 除源区域外 | Totally Stub / Totally NSSA |\n| Type-4 | ASBR Summary | ABR | 除源区域外 | Stub / Totally Stub / NSSA |\n| Type-5 | AS External | ASBR | 全 AS | Stub / Totally Stub / NSSA |\n| Type-7 | NSSA External | NSSA 内 ASBR | 仅 NSSA 内 | 不跨 NSSA |\n\n# Stub 区域\n\n在区域视图下配 `stub`。规则：\n\n1. 该区域的 ABR **不向区域内注入 Type-4、Type-5**；\n2. ABR **向区域内注入一条 Type-3 的默认路由 0.0.0.0/0**；\n3. 区域内所有路由器必须都配 `stub`；\n4. 该区域**不能是 area 0**，**不能有 ASBR**（ASBR 产生的 Type-5 会被挡掉，外部路由直接丢失），也**不能被 virtual link 穿越**（虚连接要求穿越区域是普通区域）。\n\n为什么默认路由是 Type-3 而不是 Type-5？因为 Type-5 已经被挡在区域外了，只有 Type-3 才进得来——这个细节经常被问。\n\n默认路由的度量值在 Huawei VRP 上可用 `default-route-cost` 调整，**缺省值是 1**，不是 ABR 到出口的开销。多 ABR 场景下这个值很关键：两台 ABR 都发缺省，区域内路由器靠 cost 选路，如果都是 1 就会负载分担，可能形成次优路径。\n\n# Totally Stub（完全 Stub）\n\n在 Stub 基础上再加 `no-summary`（ABR 上配 `stub no-summary`）：ABR 进一步把 **Type-3 也挡掉**（默认路由那一条除外），区域内只剩 Type-1/2 拓扑和一条 Type-3 默认路由。\n\n注意两点：\n\n- `no-summary` **只配在 ABR 上有意义**。非 ABR 路由器本来也不产生 Type-3，配了不产生任何效果，但为了 Options 一致性，这些路由器仍然要配 `stub`（不带 no-summary 也行，因为 no-summary 不影响 Hello 位）。\n- 完全 Stub 区域内路由器对区域外的一切都只能走默认路由，一旦默认路由指向的 ABR 故障，区域内会完全失去域外连通性，冗余设计要慎重。\n\n# NSSA\n\n**为什么需要 NSSA：**Stub 区域不能有 ASBR，但现实里常有「末梢区域里挂了个小协议域（RIP / 静态 / 其他厂商设备），需要引进 OSPF」的需求。这个区域如果做成 Stub 就做不了。NSSA（Not-So-Stubby Area，RFC 3101）就是来解决这个矛盾的：它**像 Stub 一样阻断 Type-5，但允许区域内的 ASBR 用 Type-7 在本区域内部泛洪外部路由**。\n\n规则：\n\n1. 阻断 Type-4、Type-5；允许 Type-1/2/3 和 Type-7；\n2. **Type-7 只在 NSSA 内泛洪**，出不了区域边界；\n3. NSSA 的 **ABR 负责把 Type-7 翻译成 Type-5**，再通告到其他普通区域和骨干；\n4. 区域内所有路由器必须配 `nssa`，Hello 中 E=0、N=1。\n\n**翻译器选举：**一个 NSSA 可能有多台 ABR，默认由 **Router ID 最大的 ABR** 承担 Type-7→Type-5 的翻译。可以用 `translator-always` 强制某台始终翻译。翻译器挂了要等重新选举，这期间外部路由在其他区域会中断——这是 NSSA 多出口设计的可靠性弱点，要有预期。\n\n**P-bit（Propagate bit）：**Type-7 LSA 的格式与 Type-5 基本相同，但额外带一个 P-bit，用来标记「这条 LSA 需要被 ABR 翻译成 Type-5 送到区域外」。**只有 P=1 的 Type-7 才会被翻译**，P=0 的只在 NSSA 内部本地有效。所以当你在其他区域看不到某条 NSSA 内的外部路由时，先确认对应 Type-7 的 P-bit 是否为 1，再去查翻译器选举。\n\n**NSSA 的默认路由：**NSSA 内路由器同样需要一条出区默认路由。在 ABR 上配 `nssa default-route-advertise`，ABR 会向区域内注入一条 **Type-7** 的缺省 LSA。这和 Stub 区域用 Type-3 注入缺省不一样，注意区分。\n\n# Totally NSSA（完全 NSSA）\n\n`nssa no-summary`：在 NSSA 基础上，ABR 把 Type-3 也挡掉（默认路由除外），并向区域内注入一条 **Type-3** 的缺省路由。区域内最终只剩 Type-1/2、本区域引入的 Type-7，和一条 Type-3 默认路由。\n\n容易混淆的组合：在完全 NSSA 里，如果 ABR 和区域内的 ASBR 都做了缺省发布，会同时存在一条 Type-3 默认和一条 Type-7 默认，靠路由优先级和开销选路，排错时要看清楚用的是哪一条。\n\n# Type-7 翻译的细节\n\n- **只翻译 P=1 的 Type-7**，P=0 的不翻译。\n- **Forwarding Address（FA）的语义决定了翻译后的下一跳。**Type-7 的 FA 为 0.0.0.0 时，接收方按常规递归到通告者（ASBR）；FA 非 0 时，接收方递归到该 FA。所以要保证 FA 地址在其他区域是可达的，否则会出现「路由在表里、流量黑洞」的典型现象。这是 NSSA 排错的高频点。\n- **External Route Tag** 会原样带过去，可用于在 ASBR/ABR 上做路由策略匹配。\n- 翻译后的 Type-5 泛洪到整个 AS，其他区域路由器需要靠 Type-4 或 FA 递归到翻译路由器/ASBR，因此 NSSA 的 ABR 通常同时是 Type-4 的产生者。\n\n# 设计取舍与相邻技术分工\n\n- **特殊区域 vs 路由汇总**：ABR 上 `abr-summary` 做区域间聚合，ASBR 上 `asbr-summary` 做外部路由聚合。汇总减少的是 LSA 的**条数**，特殊区域减少的是 LSA 的**种类**，两者互补，不能互相替代。\n- **特殊区域 vs filter-policy**：filter-policy 是过滤具体路由，作用点单一、可以只影响某些前缀；特殊区域是协议级的区域能力变更，对区域内所有路由器生效，还顺带生成默认路由。\n- **单出口才适合 Stub/完全 Stub**：多出口时，两台 ABR 各自下发默认路由，区域内路由器可能从 A 进来、从 A 出去却要绕行 B，产生次优甚至环路风险。多出口一般用 NSSA + 汇总，或者干脆不做特殊区域。\n- **注意事项**：Stub/NSSA 区域的 ABR 依然要维护完整的 Type-5 LSDB（因为它连着普通区域或骨干），省的是区域内部路由器的资源，不是 ABR 的。\n\n# 排错思路\n\n1. 邻居起不来 → 先查两侧区域类型配置是否一致（Hello Options 的 E/N 位）。\n2. 区域内还看得到 Type-5 → 查区域内是否有路由器没配 `stub`/`nssa`，或 ABR 上是否漏配 `no-summary` 导致 Type-3 没被挡。\n3. 其他区域看不到 NSSA 内的外部路由 → 查 P-bit、查翻译器选举、查 ABR 是否存在。\n4. 有路由但 ping 不通 → 查 Type-7 的 FA 可达性和回程路由。\n5. 默认路由开销不对 → 查 `default-route-cost` 和 `nssa default-route-advertise` 的 cost 参数。\n",
   "cmds": [
     "display ospf brief",
     "display ospf lsdb",
+    "display ospf lsdb nssa",
     "display ospf routing",
-    "display ospf interface GigabitEthernet0/0/1",
-    "display ospf peer"
+    "display ospf peer verbose"
   ],
   "pits": [
-    "区域内所有路由器必须同时配 stub/nssa，否则邻居建不起来",
-    "NSSA 默认路由不会自动生成，需在 ABR 上配 default-route-advertise",
-    "多 ABR 的 NSSA 要确认 translator 选举，必要时手工指定",
-    "Virtual Link 不能穿越 Stub/NSSA 区域",
-    "Totally 系列是 no-summary 扩展，非标准区域类型"
+    "区域内路由器 stub/nssa 配置不一致，Hello 的 E/N 位不匹配，邻居起不来",
+    "area 0 不能配成 Stub/NSSA；有 ASBR 的区域不能配成 Stub",
+    "Stub 区域的缺省是 ABR 用 Type-3 注入，不是 Type-5，别在 LSDB 里找错",
+    "NSSA 中 P-bit 为 0 的 Type-7 不会被翻译，其他区域看不到属正常",
+    "多 ABR 时翻译器由 Router ID 最大者担任，可用 translator-always 固定"
   ],
   "qa": [
     {
-      "q": "Stub 区域和 NSSA 区域的核心区别是什么？",
-      "a": "Stub 禁止 ASBR、阻断 Type 5，由 ABR 自动注入 Type 3 默认路由；NSSA 允许 ASBR，用 Type 7 承载外部路由并由 ABR 转换为 Type 5，默认路由需手工配置。"
+      "q": "Stub 区域和 Totally Stub 区域的区别？",
+      "a": "Stub 只阻断 Type-4/5，保留其他区域的 Type-3 明细，ABR 注入 Type-3 默认路由；Totally Stub 额外阻断 Type-3（默认除外），区域只剩一条默认，配置为 stub no-summary。"
     },
     {
-      "q": "Type 7 LSA 的 P-bit 作用是什么？",
-      "a": "P-bit 置 1 表示该 Type 7 需要被 NSSA 的 ABR 转换为 Type 5 泛洪到其他区域；若 Forwarding Address 不可达等情况下会被清零，不再转换。"
+      "q": "NSSA 为什么需要 Type-7？",
+      "a": "Stub 不允许 ASBR，因为阻断 Type-5。NSSA 让区域内 ASBR 用 Type-7 在本区域泛洪外部路由，再由 ABR 翻译成 Type-5 送出，兼顾了末梢优化和外部引入。"
     },
     {
-      "q": "为什么 Stub 区域不能有 ASBR？",
-      "a": "Stub 阻断 Type 5，ASBR 引入的外部路由无法在区域内有效泛洪，且 Hello 的 E-bit 不匹配，配置上也不允许。"
+      "q": "Type-7 转 Type-5 由谁完成？",
+      "a": "NSSA 的 ABR。多 ABR 时 Router ID 最大者翻译，可用 translator-always 强制；只有 P-bit 置位的 Type-7 才会被翻译。"
+    },
+    {
+      "q": "特殊区域配置不一致会有什么现象？",
+      "a": "Hello 报文 Options 字段的 E-bit/N-bit 与本地区域配置不匹配，Hello 被丢弃，邻居停在 Down/Init，无法建立邻接。"
+    },
+    {
+      "q": "哪些区域不能配置为 Stub？",
+      "a": "骨干区域 area 0；含有 ASBR 的区域；需要被 virtual link 穿越的区域。"
     }
   ],
-  "syllabus": "HCIP-Datacom OSPF 特殊区域（Stub/NSSA）与 LSA 优化"
+  "syllabus": "HCIP-Datacom OSPF 高级特性（区域类型与特殊区域）"
 }

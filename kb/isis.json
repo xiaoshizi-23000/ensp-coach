@@ -5,43 +5,44 @@
   "cat": "路由",
   "keys": [
     "IS-IS",
-    "Intermediate System to Intermediate System",
-    "分层结构",
-    "邻居建立",
-    "IIH",
+    "Intermediate System to System",
     "Level-1",
-    "Level-2"
+    "Level-2",
+    "IIH",
+    "DIS",
+    "NET",
+    "邻接关系"
   ],
-  "one": "IS-IS 通过 Level-1/Level-2 分层和 IIH 报文建立邻居，实现域内路由。",
-  "analogy": "IS-IS 就像一家公司分部门和总公司：Level-1 是部门内部，大家互相认识；Level-2 是总公司，部门领导之间互通。部门员工要跨部门办事，得先找自己领导（Level-1-2 路由器），领导再通过总公司网络（Level-2）联系对方领导。这样设计是为了让部门内部变动不影响总公司，结构清晰、好管理。",
-  "body": "## 为什么需要分层\n\nIS-IS 是一种链路状态路由协议，最初为 OSI 的 CLNP 设计，后来扩展支持 IPv4/IPv6。在大规模网络中，如果所有路由器都在一个平面里泛洪链路状态信息，LSDB 会变得巨大，SPF 计算频繁，稳定性差。IS-IS 采用两级分层结构：Level-1（区域内）和 Level-2（骨干区）。\n\n- **Level-1**：负责区域内部路由，只维护本区域的 LSDB，不知道其他区域的明细。\n- **Level-2**：负责区域间路由，维护骨干区的 LSDB，相当于骨干路由器。\n- **Level-1-2**：同时参与两个层次，像 ABR 一样，将 Level-1 的明细通过 ATT 比特通告给区域内的路由器，并将区域间路由注入 Level-1。\n\n这种设计的好处是：区域内部拓扑变化不会影响其他区域，Level-2 路由器不需要知道每个区域的明细，减轻了骨干设备的负担。\n\n## 层次与路由器类型\n\n| 路由器类型 | 维护的 LSDB | 作用 |\n|-----------|------------|------|\n| Level-1 | Level-1 LSDB | 区域内部通信 |\n| Level-2 | Level-2 LSDB | 骨干区域通信 |\n| Level-1-2 | 两个 LSDB | 连接区域与骨干 |\n\n默认情况下，华为路由器接口的 circuit-type 是 Level-1-2，即同时建立 Level-1 和 Level-2 邻居。\n\n## 邻居建立过程\n\nIS-IS 邻居建立通过 IIH（IS-IS Hello）报文完成。IIH 报文分为两种：Level-1 LAN IIH 和 Level-2 LAN IIH（广播网络），以及 P2P IIH（点到点网络）。\n\n### 广播网络中的邻居建立\n\n在广播网络中，IS-IS 选举 DIS（Designated Intermediate System），类似于 OSPF 的 DR，但没有 Backup DIS。DIS 负责伪节点（Pseudonode）的 LSP 生成和泛洪。\n\n邻居建立过程：\n\n1. 路由器从接口发送 IIH 报文，携带系统 ID、区域地址、支持的协议、邻居列表等。\n2. 收到 IIH 后，检查区域地址是否匹配（Level-1 要求区域地址一致，Level-2 不要求）。\n3. 检查认证信息（如果配置了认证）。\n4. 检查接口的 circuit-type 是否兼容（例如 Level-1 接口只能与 Level-1 或 Level-1-2 建立 Level-1 邻居）。\n5. 检查 MTU（P2P 模式下会检查，广播模式下不检查）。\n6. 检查系统 ID 是否冲突（不能相同）。\n7. 如果所有检查通过，则建立邻居关系，状态从 Down 变为 Up（广播网络）或 Initializing 变为 Up（P2P）。\n\n### 点到点网络中的邻居建立\n\nP2P 网络中，IS-IS 通过三次握手建立邻居：\n\n1. 路由器发送 P2P IIH，状态为 Down。\n2. 收到对端 IIH 后，如果对端 IIH 的邻居列表中包含自己的系统 ID，则状态变为 Initializing。\n3. 自己发送的 IIH 中邻居列表包含对端系统 ID，对端收到后状态变为 Up。\n4. 双方都收到对方的 IIH 且邻居列表包含自己，状态变为 Up。\n\nP2P 模式下，IS-IS 会检查 MTU，如果 MTU 不匹配，邻居可能停留在 Initializing 状态。\n\n### 邻居建立的条件\n\n- **区域地址**：Level-1 邻居要求区域地址一致；Level-2 邻居不要求。\n- **系统 ID**：不能冲突。\n- **认证**：如果配置了认证，必须匹配。\n- **接口类型**：circuit-type 必须兼容。\n- **MTU**：P2P 模式下要求 MTU 一致（华为默认不检查，但可以配置）。\n- **网络类型**：广播网络和 P2P 网络的 IIH 格式不同，不能建立邻居。\n\n## IIH 报文格式\n\nIIH 报文是 IS-IS PDU 的一种，类型为 15（Level-1 LAN IIH）、16（Level-2 LAN IIH）、17（P2P IIH）。主要字段包括：\n\n- **Circuit Type**：表示接口的层次类型（1、2、3 分别表示 Level-1、Level-2、Level-1-2）。\n- **System ID**：发送者的系统 ID。\n- **Holding Time**：邻居保持时间，默认 30 秒（华为默认 30 秒，10 倍 Hello 间隔）。\n- **PDU Length**：报文长度。\n- **Priority**：DIS 选举优先级（广播网络）。\n- **LAN ID**：DIS 的系统 ID 和伪节点 ID（广播网络）。\n- **TLV**：可变字段，包括区域地址 TLV（1）、协议支持 TLV（129）、IP 接口地址 TLV（132）、邻居 TLV（6）等。\n\n## DIS 选举\n\n广播网络中，IS-IS 选举 DIS，规则如下：\n\n1. 比较接口优先级（Priority），范围 0-127，默认 64，值越大越优先。\n2. 如果优先级相同，比较 System ID（或 SNPA），值越大越优先。\n3. 如果 System ID 相同，比较伪节点 ID（Pseudonode ID），值越大越优先。\n\nDIS 选举是抢占式的，新加入的路由器如果优先级更高，会立即成为 DIS。DIS 负责生成伪节点 LSP，代表广播网络。\n\n## 与 OSPF 的对比\n\n| 特性 | IS-IS | OSPF |\n|------|-------|------|\n| 分层 | Level-1/Level-2 | Area 0/其他区域 |\n| 骨干区 | Level-2（连续） | Area 0（连续） |\n| 区域边界 | Level-1-2 路由器 | ABR |\n| 邻居建立 | IIH | Hello |\n| DIS/DR | DIS（无备份） | DR/BDR |\n| 封装 | 直接封装在数据链路层 | 封装在 IP 层 |\n| 扩展性 | 较好 | 一般 |\n\n## 设计取舍\n\nIS-IS 将分层信息放在路由器级别而不是接口级别（一个路由器可以同时是 Level-1 和 Level-2），简化了区域边界的设计。Level-2 路由器需要连续，否则需要虚链路（类似 OSPF）。IS-IS 的 TLV 结构非常灵活，易于扩展，这是它后来能支持 IPv6 和 Segment Routing 的重要原因。\n\n## 常见问题\n\n- **邻居无法建立**：检查区域地址、认证、circuit-type、系统 ID 冲突、MTU（P2P）。\n- **邻居状态不稳定**：检查 Holding Time 和 Hello 间隔，链路质量。\n- **DIS 选举不符合预期**：检查优先级和 System ID。\n- **Level-1 路由无法到达其他区域**：检查 Level-1-2 路由器的 ATT 比特和默认路由。",
+  "one": "IS-IS 用 Level-1/Level-2 两级层次和 IIH 报文完成区域内与骨干邻接建立。",
+  "analogy": "把 IS-IS 想象成一家大公司：每个部门内部同事互相认识（Level-1），部门经理之间只跟总部管理层对接（Level-2）。普通员工要跨部门办事，先找本部门经理，经理再报给总部，总部再转给目标部门经理，最后才到对方员工。这样每个人不需要认识全公司所有人，组织才能扩得大、理得清。",
+  "body": "## 为什么 IS-IS 要分层\n\nIS-IS 最初是 ISO 为 CLNP（无连接网络协议）设计的链路状态协议，后来 IETF 把它扩展成集成 IS-IS（Integrated IS-IS）来承载 IPv4/IPv6。它诞生的年代，运营商骨干网规模已经在爆炸，设计者必须回答一个问题：**拓扑数据库能不能不全网泛洪？**\n\nOSPF 的答案是区域（Area）+ 骨干区域 0 的星型约束；IS-IS 的答案更干脆：**把路由器本身分成两种角色**——Level-1（L1）和 Level-2（L2），一台路由器可以同时是 L1、L2，也可以只做其中一个。\n\n| 角色 | 类比 | 泛洪范围 | 拓扑库 |\n|---|---|---|---|\n| Level-1 | 部门内部员工 | 本区域（同一 Area ID） | L1 LSDB |\n| Level-2 | 总部管理层 | 骨干（连续 L2 路由器集合） | L2 LSDB |\n| L1/L2 | 部门经理 | 两者都参与 | L1 + L2 两个 LSDB |\n\n关键差别在于：OSPF 的区域是**接口属性**（一个接口属于一个 area），IS-IS 的 Level 是**路由器/邻接属性**，同一台路由器可以在同一块物理链路上既建 L1 邻接又建 L2 邻接（点对点链路上两个邻接共用一条链路，状态都 up 才算正常）。这是 IS-IS 独有的“一条链路两个邻接”模型，也是排错时最容易看漏的地方。\n\n### 区域边界在链路上，不在设备里\n\nOSPF 的 ABR 是“一只脚踩两个区域”的设备，区域边界落在设备内部。IS-IS 没有 ABR 这个概念，它叫 **L1/L2 路由器**。区域边界落在**链路**上：\n\n- L1 邻接的两端 Area ID 必须相同；\n- L2 邻接的两端 Area ID 可以不同（跨区域链路）；\n- 一台 L1/L2 路由器如果和另一台路由器同时建立 L1 与 L2 邻接，两个邻接的 area 判断是**分开做的**。\n\n所以 IS-IS 里“骨干”不是某个固定 area，而是**所有 L2 路由器组成的连续集合**。L2 邻接不校验 area，这给规划带来灵活（骨干可以横跨多个 area），也带来风险：一个多余 L2 邻接可能把拓扑拉乱。\n\n### 默认路由与 ATT 位\n\nL1 路由器只有本区域拓扑，出区域怎么办？靠 L1/L2 路由器在 L1 LSP 中置 **ATT（Attachment）位**，L1 路由器收到 ATT=1 的 LSP 后自动产生一条默认路由指向该 L1/L2 路由器。这是 IS-IS“无需配置”的优雅之处，但也是事故源：到外部有两个以上出口时，ATT 默认路由可能选错出口，必须用 `attached-bit avoid-learning` 或过滤 LSP 控制。\n\n## 邻居建立：三种 IIH\n\nIS-IS 的邻居发现靠 **IIH（IS-IS Hello PDU）**，这是它唯一的“周期性保活 + 参数协商”报文。按链路类型和 Level 分红三种：\n\n| 报文 | 链路类型 | Level |\n|---|---|---|\n| LAN IIH | Broadcast（以太网） | L1 / L2 各一 |\n| P2P IIH | Point-to-Point | L1 / L2 共用一种格式 |\n| P2P Over LAN IIH | 点对点链路上模拟广播行为（RFC 5309） | L1 / L2 |\n\nHello 是**封装在数据链路层**直接发的，不经过 IP。以太网上的目的 MAC 是：\n\n- L1 LAN IIH：`01-80-C2-00-00-14`\n- L2 LAN IIH：`01-80-C2-00-00-15`\n- P2P IIH：`09-00-2B-00-00-05`\n\n这也是 IS-IS 能在 IP 不可达时仍能建邻接的原因（例如 IPv4 地址冲突、接口借地址，甚至只做 CLNS 场景）。但反过来说，抓包时你抓不到“IP 层的 IS-IS”，必须按 MAC 过滤。\n\n### 建立邻接必须匹配的参数\n\nIIH 里携带了 **TLV**（Type-Length-Value）结构，其中决定邻接能否建立的关键项：\n\n1. **Protocol Discriminator / Header Length / Version / System ID Length / PDU Type / Version**——头部固定字段，System ID Length 必须为 6（集成 IS-IS 常用），否则直接丢弃；\n2. **Area Address TLV（Type 1）**：L1 邻接要求两端至少有一个 area address 相同；L2 邻接不检查；\n3. **IS Neighbor TLV（Type 6）**：列出本接口上已看到的邻居 MAC（LAN）；P2P 上是本地接口 MAC。用于“我见过你”的双向确认；\n4. **Hold Time TLV（Type 10）**：保持时间，默认是 Hello 间隔的 3 倍（华为设备广播 Hello 10s、保持 30s；P2P Hello 10s、保持 30s）；\n5. **Authentication TLV（Type 10，带 subtype）：** 认证信息，HMAC-MD5 / 明文 / simple，不匹配直接丢弃；\n6. **Protocols Supported TLV（Type 129）**：声明支持 IPv4/IPv6，不匹配时报文还能收，但协议栈能力不协商，属于排查误区；\n7. **MT ID / MT 相关 TLV**：多拓扑场景；\n8. **P2P Adjacency State TLV（Type 240，仅 P2P）**：**这是 P2P 建立快的关键**。\n\n### 三个关键“状态”与 LAN 上的 DIS\n\n集成 IS-IS 没有 OSPF 的 Init/2-Way/ExStart 那一长串精细状态机，它只有三个状态：**Down → Initializing → Up**。\n\n- **Down**：没收到任何 IIH；\n- **Initializing**：收到 IIH，但**我还没出现在对方的 IS Neighbor TLV 里**（单向可见，等三次握手）；\n- **Up**：双方 IIH 中都看到对方，邻接成立，开始泛洪 LSP/CSNP/PSNP。\n\n在广播链路上，等待流程是：设备周期发 IIH，把已知邻居填入 IS Neighbor TLV；对方一旦在 TLV 里看到我的 MAC，我就从 Initializing 转 Up。所以以太网上并不比 OSPF 快，因为没有显式三次握手，要等下一轮 Hello 才确认。\n\n**P2P 链路用 Adjacency State TLV 解决慢收敛**：P2P IIH 中带 240 号 TLV，内含状态（Up/Down/Initializing）和扩展本地电路 ID。双方通过它可以做到**一次 Hello 就 Up**：我发 Up+你的 Circuit ID，你回 Up+我的 Circuit ID，一轮完成。所以在点对点上 IS-IS 收敛比 OSPF 快很多。这正是一个**权衡**：为了跑得快，用显式协商替代周期等待。\n\n### DIS：等级别的“伪节点”服务者\n\n广播链路上每台路由器都两两建邻接，N 台设备就是 N(N-1)/2 个邻接，LSP 泛洪量爆炸。IS-IS 的解法是 **DIS（Designated Intermediate System）**：\n\n- 每个 Level 在每条广播链路上独立选举一个 DIS（L1 一个、L2 一个，可能是同一台设备）；\n- DIS 生成 **Pseudonode LSP（伪节点 LSP）**，System ID 是本机 System ID + 字节 `0x00` 作 PSN 编号（如 `0000.0000.0001.00-00`），链路就是伪节点；\n- 所有路由器只需和伪节点建邻接，LSP 通过伪节点泛洪；\n- 选举优先级来自 IIH 中的 **Priority（0–127，默认 64）**，优先级高者胜；相同时比较 **MAC 最大者**（注意是最大，不是最小，和 OSPF 相反）；\n- **DIS 是抢占的**：新来的高优先级设备立刻夺权。\n\n此外以太网上 DIS 的 Hello 间隔是 3.3s，其他路由器是 10s（2 倍 DIS 周期的 3 倍？不，是 **Hello 3.3s，保持 10s**），因为 DIS 需要更快让全网知道它还在。这是运维现场最容易误读的“为什么只有它 Hello 是 3 秒”。\n\n## PSNP/CSNP/LSP 的分工（与邻接的衔接）\n\n邻接 Up 之后链路状态数据库同步靠三种 PDU：\n\n- **LSP**（Link State PDU）：真正承载拓扑和路由信息，有 15 分钟一次的周期性刷新，还有 **Remaining Lifetime** 字段，0 表示撤销；\n- **CSNP**（Complete SNP）：携带 LSDB 摘要列表，只有 **DIS 在广播链路上周期（默认 10s）发送**；P2P 上只在邻接 Up 那一刻各发一次；\n- **PSNP**（Partial SNP）：部分确认与请求，点对点链路上用于 ACK 与请求缺失 LSP；广播链路上普通路由器用它请求 LSP。\n\n注意：**IS-IS 的 LSP 不是 TCP 可靠传输**——基于链路层，LSP 靠 PSNP/CSNP 显式或隐式确认，无窗口概念。所以邻接抖动时 LSP 重传逻辑较复杂，排错时要看“LSP 是否被确认”。\n\n## 设计取舍汇总\n\n| 抉择 | 好处 | 代价 |\n|---|---|---|\n| Level 是路由器属性 | 一条链路可同时承载 L1 与 L2，骨干规划灵活 | 邻接排查要同时看两个 Level |\n| 区域边界在链路上 | 无 ABR 的特殊角色，扩展方便 | 规划不当容易拉乱骨干拓扑 |\n| 用 ATT 位下发默认路由 | 零配置可达网外 | 多出口时默认路由可能选错，必须精确控制 |\n| P2P 用 Adjacency State 三次握手 | 一轮 Hello 就 Up，收敛快 | 需要设备都支持 RFC 5303 |\n| DIS 抢占 + MAC 大者胜 | 无需等待失效，切换快 | 高优先级设备上线会引发短暂拓扑震荡 |\n| Hello 直接封装在 L2 | 不必等 IP 可用即可建邻接 | 抓包过滤、防火墙放行都按 MAC 配，容易漏 |\n\n## 排错思路回顾\n\n建立不了 L1 邻接，按顺序看：System ID 是否重复（System ID 相同会互斥，日志常见 “System ID conflict”）、Area Address 是否相交、认证是否一致、MTU 是否一致（IIH 超长被丢弃，尤其开了认证后）、Level 是否匹配（一端 `isis circuit-level level-2`、另一端只开 L1 就永远起不来）。以太网上还要检查是否被 DIS 选举变化搞混——但 DIS 变化不影响邻接本身，只影响伪节点 LSP。",
   "cmds": [
     "display isis peer",
-    "display isis interface",
-    "display isis lsdb",
-    "display isis route",
+    "display isis peer verbose",
+    "display isis lsdb level-1",
+    "display isis interface GigabitEthernet0/0/0 verbose",
     "display isis error"
   ],
   "pits": [
-    "Level-1 邻居要求区域地址一致，Level-2 不要求。",
-    "P2P 邻居建立需三次握手，MTU 不一致会卡在 Initializing。",
-    "DIS 选举抢占式，优先级高者立即成为 DIS。",
-    "系统 ID 冲突会导致邻居无法建立。",
-    "广播网络 IIH 不检查 MTU，P2P 检查。"
+    "System ID 冲突会导致邻接反复建立又断开",
+    "系统ID长度必须为6，L1要求Area Address至少一个相同，L2不检查",
+    "认证TLV不匹配或MTU不一致时Hello被静默丢弃，需抓包确认",
+    "P2P用Adjacency State TLV可一轮Hello就Up，广播网仍需等下一轮",
+    "DIS抢占且MAC大者胜，新设备上线会引起伪节点LSP短时震荡"
   ],
   "qa": [
     {
-      "q": "IS-IS 邻居建立的条件有哪些？",
-      "a": "区域地址（Level-1 需一致）、系统 ID 不冲突、认证匹配、circuit-type 兼容、MTU（P2P）一致、网络类型相同。"
+      "q": "IS-IS 的 Level-1 和 Level-2 有什么区别？区域边界在哪？",
+      "a": "L1 在本区域内泛洪，拓扑库只有本区域，靠 ATT 位默认路由出区；L2 在连续骨干内泛洪。区域边界在链路上而非设备上，L1 邻接要求 Area Address 相同，L2 不校验，L1/L2 路由器同时维护两套 LSDB。"
     },
     {
-      "q": "IS-IS 的 DIS 和 OSPF 的 DR 有什么区别？",
-      "a": "DIS 没有备份，选举是抢占式的；DR 有 BDR，选举非抢占。DIS 优先级范围 0-127，DR 是 0-255。"
+      "q": "IS-IS 邻接的三个状态是什么？P2P 为什么收敛快？",
+      "a": "Down、Initializing、Up。P2P 通过 P2P Adjacency State TLV（Type 240）显式三次握手，双方一轮 Hello 就能到 Up；广播网靠 IS Neighbor TLV 双向确认，要等下一轮 Hello，故慢。"
     },
     {
-      "q": "Level-1-2 路由器如何实现区域间路由？",
-      "a": "Level-1-2 路由器在 Level-1 LSP 中设置 ATT 比特，向区域内注入默认路由，并将 Level-1 明细通过 Level-2 LSP 通告到骨干区。"
+      "q": "DIS 如何选举？为什么有的设备 Hello 是 3.3 秒？",
+      "a": "按 IIH 中 Priority（0–127，默认 64）选，相同时比 MAC，大者胜，且可抢占。DIS 在广播网以 3.3s 发 Hello、保持 10s，普通路由器为 10s/30s，用于让全网快速感知 DIS 存活。"
     }
   ],
-  "syllabus": "HCIP-Datacom 路由技术"
+  "syllabus": "HCIP-Datacom 路由技术（IS-IS 高级特性）"
 }

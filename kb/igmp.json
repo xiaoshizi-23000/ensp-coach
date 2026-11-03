@@ -6,45 +6,47 @@
   "keys": [
     "IGMP",
     "Internet Group Management Protocol",
-    "组播组成员管理",
+    "组管理协议",
     "IGMPv1",
     "IGMPv2",
     "IGMPv3",
-    "IGMP Snooping"
+    "IGMP Snooping",
+    "组播组成员管理"
   ],
-  "one": "主机与组播路由器之间协商加入或离开组播组的信令协议",
-  "analogy": "组播就像小区里的大喇叭广播，只有关心的人才会去听。IGMP 就是居民跟物业登记“我要听这个频道”的手续：想听就报个名，不想听就销个号，物业定期点名确认还有谁在听。物业（路由器）靠这份名单决定要不要把广播信号引进小区，不登记的人自然收不到，也不会浪费小区带宽。",
-  "body": "## 为什么需要 IGMP\n\n组播（multicast）的核心思想是“一份流量、多处接收”。但路由器怎么知道某个网段上到底有没有接收者？如果没有接收者还把组播流量往这个网段转发，就是纯浪费。IGMP 就是解决这个问题的：它运行在**主机与直连组播路由器之间**，让路由器知道每个组播组在本网段上是否还有成员。\n\n注意分工：IGMP 只管“本地成员关系”，不负责组播路由。跨网段的组播转发靠 PIM（Protocol Independent Multicast）等组播路由协议，PIM 再通过 IGMP 得知下游有没有接收者，从而决定是否向上游发 Join。所以 IGMP 是组播树的“叶子探测器”。\n\nIGMP 报文封装在 IP 报文中，IP 协议号 2，TTL 通常为 1（只在本地链路传播），目的地址为组播地址（如 224.0.0.1 或 224.0.0.2）。\n\n## IGMPv1\n\nIGMPv1（RFC 1112）只有两种报文：\n\n- **Membership Query**：查询报文，目的地址 224.0.0.1，源地址为查询器接口地址。\n- **Membership Report**：报告报文，目的地址为所加入的组地址。\n\n工作机制：\n\n1. 主机加入某组时主动发送 Report。\n2. 路由器周期性（默认 60 秒）发 Query。\n3. 主机收到 Query 后，若仍是成员则回 Report。\n\nv1 有两个明显缺陷：\n\n- **没有 Leave 报文**：主机离开后路由器不知道，只能靠 Query 超时（默认 3 个查询周期，约 180 秒）才删除成员，收敛慢。\n- **没有查询器选举**：同一网段多个路由器都发 Query，靠 PIM 的 DR 选举间接解决，IGMP 自身不处理。\n\n## IGMPv2\n\nIGMPv2（RFC 2236）是实际部署最广的版本，主要增强：\n\n### 1. 新增 Leave Group 报文\n\n主机离开时发送 Leave，目的地址 224.0.0.2（All Routers）。路由器收到 Leave 后并不立即删除，而是发送**特定组查询**（Group-Specific Query），确认该组是否还有其他成员，无人应答才删除。这避免了“最后一个成员离开”被误判。\n\n### 2. 查询器选举\n\n同一网段多个组播路由器时，只有查询器发 Query，其他路由器作为非查询器监听。选举规则：**接口 IP 地址最小者当选**。非查询器启动一个 Other-Querier-Present 定时器（默认 125 秒），超时未收到 Query 就认为查询器失效，重新选举。\n\n### 3. 报文格式增强\n\nv2 的 Query 报文在 v1 基础上增加了 **Max Response Time** 字段（单位 0.1 秒），用于控制主机应答的最大延迟，配合报告抑制。\n\n### 4. 报告抑制机制\n\n主机收到 Query 后不立即应答，而是随机延迟 0~Max Response Time 再发 Report。若期间听到同组其他主机的 Report，就取消自己的应答。这样同一网段同组只需一份 Report，路由器就知道“至少有一个成员”，大幅减少报文数量。\n\n### 5. 离开流程\n\n主机发 Leave → 路由器发 Group-Specific Query（默认发 2 次，间隔 1 秒）→ 无 Report 则删除组记录。\n\n### v1/v2 兼容\n\nv2 路由器能识别 v1 主机（v1 Report 的 Max Response Time 字段为 0），并降级为 v1 模式运行；v1 路由器无法识别 v2 的 Leave。\n\n## IGMPv3\n\nIGMPv3（RFC 3376）为支持 **SSM（Source-Specific Multicast）** 而设计，核心变化是主机可以指定“只接收来自某些源的流量”。\n\n### 1. 报文变化\n\n- **Query**：增加 **Number of Sources** 和 **Source Address** 列表，支持 Group-Specific Query 和 Group-and-Source-Specific Query。\n- **Report**：v3 取消了 Report 抑制（因为不同主机的源过滤需求不同，不能互相抑制），并引入 **Group Record** 结构，一个 Report 可携带多条记录。\n\n### 2. Group Record 类型\n\n| 类型 | 含义 |\n|---|---|\n| MODE_IS_INCLUDE (IS_IN) | 只接收指定源列表 |\n| MODE_IS_EXCLUDE (IS_EX) | 接收除指定源外的所有源 |\n| CHANGE_TO_INCLUDE_MODE | 切换到 Include 模式 |\n| CHANGE_TO_EXCLUDE_MODE | 切换到 Exclude 模式 |\n| ALLOW_NEW_SOURCES | 在现有基础上允许新增源 |\n| BLOCK_OLD_SOURCES | 在现有基础上屏蔽某些源 |\n\n### 3. 过滤模式与状态机\n\n每个（接口，组）维护一个过滤模式（INCLUDE/EXCLUDE）和源列表。主机根据应用层的 socket 请求（如 `IP_ADD_SOURCE_MEMBERSHIP`）动态切换模式。路由器侧维护每个组的成员状态，综合所有主机的 Report 计算出本网段对该组的实际接收需求，再通过 PIM 向上游发 (S,G) 或 (*,G) Join。\n\n### 4. 与 SSM 的关系\n\nSSM 要求主机明确指定源，使用 232.0.0.0/8 地址范围，必须 IGMPv3。ASM 模式用 v2 即可。\n\n## 版本对比\n\n| 特性 | v1 | v2 | v3 |\n|---|---|---|---|\n| Leave 报文 | 无 | 有 | 有 |\n| 查询器选举 | 无 | 有 | 有 |\n| 指定源过滤 | 无 | 无 | 有 |\n| Report 抑制 | 有 | 有 | 无 |\n| Max Response Time | 无 | 有 | 有 |\n| SSM 支持 | 否 | 否 | 是 |\n\n## 与 IGMP Snooping 的分工\n\nIGMP 是三层协议，运行在主机和路由器之间。二层交换机默认把组播帧当广播泛洪，会浪费带宽。**IGMP Snooping** 让交换机“偷听”IGMP 报文，在二层建立组播 MAC 到端口的映射表，只向有成员的端口转发。Snooping 不改变 IGMP 协议本身，只是二层优化。\n\n## 设计取舍\n\n- **报告抑制**用少量延迟换报文数量的大幅下降，适合成员密集场景；v3 取消它是为了支持源过滤的精确表达。\n- **查询器选举**把多路由器协调简化为“IP 最小者负责”，避免额外协议。\n- **TTL=1** 保证 IGMP 不跨网段，职责边界清晰。\n- **Leave + 特定组查询**用一次确认换快速收敛，比 v1 的纯超时机制好得多。",
+  "one": "主机与三层组播路由器之间用来加入、维护、离开组播组的信令协议",
+  "analogy": "组播就像一个小区里的广播喇叭系统。住户想听某个频道，得先跟物业登记一句“我要听 3 频道”，物业记下来，以后 3 频道的节目只往登记过的楼栋送。IGMP 就是住户跟物业之间那套登记、续期、退订的话术。v1 是只能登记不能退订、还得等物业定期来问；v2 加了主动退订和指定谁去回话；v3 则细到“我只要 3 频道里某个主持人说话的那段”，还能一次报一串要听和不要听的频道。",
+  "body": "## 为什么需要 IGMP\n\n组播的目的地址是一个 D 类地址（224.0.0.0/4），它标识的是“一组接收者”，而不是某一台主机。路由器要把一份组播报文送到“所有想收的人”手上，前提是它必须知道：**本网段上到底还有没有接收者、分别是哪些组**。如果没有这个信息，路由器只有两种糟糕的选择——要么把组播流量往所有接口泛洪（等于广播，浪费带宽），要么一律不转发（组播没法用）。\n\nIGMP（Internet Group Management Protocol）就是解决这个问题的：它是**主机与直连的三层组播路由器之间**的成员关系信令协议。注意它的定位——\n\n- IGMP 只管“**本网段有谁要哪个组**”，不负责跨网段找源、不负责建树，跨网段建树是 PIM 的事；\n- IGMP 报文封装在 IP 报文里，协议号 **2**，IP TTL 固定为 **1**，也就是说 IGMP 报文**不会被路由器转发**，只在本链路生效；\n- IGMP 是**主机侧主动上报 + 路由器侧查询维护**的双向机制，路由器是 Query 的发出者，主机是 Report 的发出者。\n\n一句话分工：**IGMP 负责“最后一跳”的接收者管理，PIM 负责“沿途”的组播分发树**。PIM 在最后一跳路由器上依赖 IGMP 学到的组成员关系来决定要不要向该网段下发流量（这也是 PIM-SM 里“有 IGMP 成员才建下游分支”的由来）。\n\n## 三个版本的演进逻辑\n\nIGMP 的版本差异不是“修补 bug”，而是三次需求升级：v1 解决“能不能用”，v2 解决“退订太慢”，v3 解决“按源筛选”。\n\n| 特性 | IGMPv1 | IGMPv2 | IGMPv3 |\n|---|---|---|---|\n| 报文类型 | Query(0x11)、Report(0x12) | 增加 Leave(0x17)、版本 1/2 兼容 Query | 增加 Version 3 Membership Report(0x22)，Report 可带源列表 |\n| 查询器选举 | 依赖 PIM 或路由协议 | 有独立 Query 选举机制 | 同 v2 |\n| 离组机制 | 无 Leave，靠抑制超时 | 有 Leave，配合特定组查询 | 有 Leave（v3 Report 变更即语义） |\n| 指定源 / 排除源 | 不支持 | 不支持 | 支持 INCLUDE / EXCLUDE 源过滤 |\n| 最大响应时间字段 | 无（固定超时） | 有 Max Resp Time | 有 Max Resp Code（可编码更大值） |\n| 报文抑制 | Report 抑制 | Report 抑制 | **取消抑制**，各主机独立上报 |\n| 兼容性 | 基准 | 兼容 v1 | 兼容 v1/v2 |\n\n### IGMPv1\n\n只有两种报文：**Membership Query**（目的地址 224.0.0.1，All Hosts）和 **Membership Report**（目的地址即被加入的组地址）。\n\n工作过程：主机想加入某组时发一个 Report；路由器周期性（默认 60s）发 Query；主机收到 Query 后为每个已加入的组回 Report 刷新。\n\n两个致命短板：\n\n1. **没有 Leave 报文**。主机离组时一声不吭，路由器只能等组定时器（默认 180s，即 3 个查询周期）超时才发现没人了。这导致“最后一个成员离开后流量还要继续送最多 3 分钟”。\n2. **查询器选举靠外部**。v1 规定由 PIM DR 或单播路由协议（如 OSPF DR）来兼任查询器，IGMP 自己没有选举能力，部署受限。\n\n另外 v1 的 Report 采用**抑制机制**：同一网段多台主机同时要加入同一个组时，只有第一台的 Report 会被发出，其他主机听到后就不再发。这节省了带宽，但也让路由器无法知道网段上有几台主机。\n\n### IGMPv2\n\nv2 在 v1 的基础上加了三样东西：\n\n**1. Leave 报文（类型 0x17）**\n\n主机离组时向 224.0.0.2（All Routers）发送 Leave Group Message。注意它不能直接代表“这个组没人了”——因为可能还有别的成员。所以路由器收到 Leave 后要发**特定组查询（Group-Specific Query）**，目的地址为该组地址，Max Resp Time 设成 Last Member Query Interval（默认 1s），连发 **Last Member Query Count**（默认 2）次。如果这段时间内没人回 Report，才认为该组在本网段已无成员，删除之。这个机制叫 **Last Member Query**，是 v2 最核心的优化：离组延迟从 180s 降到约 2s。\n\n**2. 查询器选举（Querier Election）**\n\n同一网段可能有多台组播路由器（比如做冗余），必须只让一台发 Query，否则多台都认为自己是查询器会导致组定时器维护混乱。v2 的规则很简单：**初始都认为自己是查询器并发 Query；收到其他路由器发来的 Query 时，比较源 IP，地址小者胜出，大者转为非查询器（Non-Querier）**。非查询器启动 Other Querier Present Timer（默认 125s，即 2 倍查询周期减一点余量），超时未收到 Query 则重新参与选举。\n\n**3. Max Response Time 字段**\n\nQuery 报文里的 Max Resp Time 字段（单位 0.1s）规定了主机回 Report 的最大随机延迟。主机在 0 到该值之间取随机数，从而把多台主机的 Report **打散**，避免同时回包拥塞。这个字段还有个隐藏用法：Last Member Query 用它做快速离组检测，General Query 用它做常规维护，一个字段两用。\n\n另外 v2 的 Report 仍然有抑制机制，与 v1 一致。\n\n### IGMPv3\n\nv3 是为 **SSM（Source-Specific Multicast）** 服务的。ASM 模型下主机只说“我要 G”，网络里任何一个源往 G 发都能收到，这带来两个问题：无法防止非法源注入、跨域按源分发困难。SSM 要求主机说“我要 **从 S 到 G**”，这就需要 IGMP 能携带源地址列表。\n\n**Version 3 Membership Report 的结构**：一个 v3 Report 报文可以携带**多个 Group Record**，每个 Group Record 包含：\n\n- Record Type：`MODE_IS_INCLUDE`(1)、`MODE_IS_EXCLUDE`(2)、`CHANGE_TO_INCLUDE_MODE`(3)、`CHANGE_TO_EXCLUDE_MODE`(4)、`ALLOW_NEW_SOURCES`(5)、`BLOCK_OLD_SOURCES`(6)；\n- Number of Sources、Multicast Address、Sources 列表。\n\n这样主机一次报文就能表达“我要 G 但只从 S1、S2 收”（INCLUDE）、“我要 G 但不要 S3 的”（EXCLUDE）以及后续的增量变更（ALLOW / BLOCK）。这正好对应 **IGMPv3 的过滤模式（Filter Mode）+ 源列表（Source List）** 模型，路由器据此维护每个组、每个源的状态，并把它转成 PIM-SM 的 (S,G) Join。\n\n**v3 取消了 Report 抑制**。因为每个主机的源列表可能都不一样，路由器必须知道每一台主机的意图，抑制会导致信息丢失。代价是网段主机多时 Report 报文变多，需要靠 Query 的 Max Resp Code 打散。\n\n**v3 的 Query 也扩展了**：Query 报文里增加了 **S 标志位**（Suppress Router-Side Processing）和 **QRV**（Querier's Robustness Variable）、**QQIC**（Querier's Query Interval Code），并支持 Group-Specific 与 Group-and-Source-Specific 两种查询，用于在收到 BLOCK 时核查是否还有成员需要该源。\n\n## 状态机与定时器\n\n路由器侧和主机侧各维护一套状态，理解定时器是排错的关键。\n\n**路由器侧（每接口每组）**：\n\n- **Group Membership Timer**（组定时器）：该组有成员的超时时间。收到 Report 时刷新为 `Group Membership Interval = (Robustness Variable × Query Interval) + Max Response Time`，默认 `(2×125)+10 = 260s`。超时则删除该组。\n- **Other Querier Present Timer**：非查询器用来判断查询器是否存活，默认 125s（v2）。\n- **Version 1/V2 Host Present Timer**：兼容定时器。只要收到过 v1 或 v2 Report，就启动该定时器，在该定时器有效期内，路由器必须**降级**为 v1/v2 行为（发对应版本的 Query、保留 Report 抑制、不支持源过滤）。\n\n**主机侧**：\n\n- 收到 General Query 后启动随机延迟定时器（0~Max Resp Time），到期回 Report；\n- 收到 Group-Specific Query 同理；\n- v2 主机在抑制期内听到同组 Report 则取消自己的发送。\n\n**兼容性设计是向下兼容而非协商**：路由器必须能同时处理 v1/v2/v3 的 Report，并根据收到的报文类型动态决定自己发哪种 Query。这是 IGMP 设计上很重要的一条取舍——不做版本协商握手，靠“听到什么就降级”，代价是混合网段里路由器可能长期停留在低版本行为，v3 的源过滤能力被浪费。\n\n## IGMP 与 IGMP Snooping 的分工\n\n二层交换机默认对组播报文做**泛洪**（因为组播目的 MAC 是 01:00:5e 开头的广播性质地址，交换机的 MAC 表学不到）。IGMP Snooping 让交换机“偷听”主机与路由器之间的 IGMP 报文，在本地建立“**组播地址 ↔ 端口**”的转发表，从而只往有成员的端口转发。\n\n关键点：\n\n- Snooping 是**二层代理/监听**，不改变 IGMP 报文内容，也不终结 IGMP；\n- 交换机需要识别 Query 报文以确定**路由器端口（Router Port）**，识别 Report 确定**成员端口（Member Port）**；\n- 存在 **IGMP Snooping 代理（Proxy）**与**IGMP Snooping Querier** 两种扩展：前者在路由器与主机间做报文聚合，后者在无三层组播路由器的纯二层环境里冒充查询器，防止组表项因收不到 Query 而老化；\n- Snooping 只能优化“同一个 VLAN 内”的转发，跨 VLAN 依然要靠三层组播路由。\n\n## 现场排错主线\n\n1. 先确认主机确实发了 Report（抓包看目的地址是否为组地址或 224.0.0.22）；\n2. 确认本网段有且只有一台 IGMP Querier（`display igmp interface` 看 Querier 状态）；\n3. 确认路由器上组表项存在（`display igmp group`），且老化时间在刷新；\n4. 再往上看 PIM 是否已建立到源的路径；\n5. 二层若不通，查 Snooping 表项与路由器端口是否正确学习。",
   "cmds": [
     "display igmp interface",
     "display igmp group",
     "display igmp interface verbose",
-    "display igmp snooping forwarding-table"
+    "display igmp-snooping port-info",
+    "display multicast routing-table"
   ],
   "pits": [
-    "主机与路由器 IGMP 版本不一致会导致成员关系建立异常，需确认两端版本",
-    "同一网段多路由器时查询器由 IP 最小者担任，地址规划不当会选错查询器",
-    "IGMPv3 取消报告抑制，成员多时 Report 报文量明显上升",
-    "二层交换机未开 IGMP Snooping 时组播会泛洪，排查带宽异常先看这里",
-    "Leave 后路由器发特定组查询，若主机未响应会延迟删除，注意 Max Response Time 配置"
+    "同网段多台路由器时务必确认 Querier 唯一，否则组表项刷新紊乱",
+    "v2 与 v3 混用时路由器会降级，v3 源过滤能力失效，别指望 SSM",
+    "主机装双网卡或启用 IGMP Snooping 抑制时易漏看 Report",
+    "组播 MAC 只有 23 位映射，不同组地址可能同 MAC，二层排错别只看 MAC",
+    "Snooping 未配 Querier 时二层组表项会老化丢失，导致泛洪恢复"
   ],
   "qa": [
     {
-      "q": "IGMPv2 相比 v1 的主要改进是什么？",
-      "a": "新增 Leave 报文实现快速离开、增加查询器选举（IP 最小者当选）、Query 增加 Max Response Time 字段、支持特定组查询确认最后成员。"
+      "q": "IGMPv2 相比 v1 的关键改进是什么？",
+      "a": "增加 Leave 报文配合特定组查询实现快速离组（约 2s vs 180s）；具备独立的查询器选举机制（源 IP 小者胜）；Query 增加 Max Resp Time 字段用于打散 Report 并复用于最后成员检测。"
     },
     {
-      "q": "IGMPv3 为什么取消报告抑制？",
-      "a": "不同主机的源过滤需求不同，Report 携带各自的源列表，互相抑制会丢失源信息，因此 v3 要求每台主机独立上报。"
+      "q": "IGMPv3 为什么取消 Report 抑制？",
+      "a": "v3 每个主机的 INCLUDE/EXCLUDE 源列表可能不同，路由器必须掌握每台主机的完整意图才能正确维护 (S,G)；抑制会导致源过滤信息丢失，因此改为各主机独立上报，靠 Max Resp Code 打散报文。"
     },
     {
-      "q": "IGMP 和 PIM 是什么关系？",
-      "a": "IGMP 负责主机与直连路由器间的本地成员管理，PIM 负责跨网段组播路由。PIM 通过 IGMP 得知下游是否有接收者，据此决定是否向上游发 Join。"
+      "q": "IGMP 与 PIM 的关系？",
+      "a": "IGMP 只在主机与直连路由器之间维护本网段的组成员关系，报文 TTL=1 不跨网段；PIM 负责跨网段建立组播分发树。最后一跳路由器把 IGMP 学到的组（或 S,G）映射为 PIM Join 向 RP/源方向发送。"
     },
     {
-      "q": "SSM 为什么必须用 IGMPv3？",
-      "a": "SSM 要求主机指定组播源，只有 IGMPv3 的 Report 能携带源地址列表和 INCLUDE/EXCLUDE 过滤模式。"
+      "q": "什么是 IGMP Snooping？为什么需要它？",
+      "a": "交换机通过侦听 IGMP 报文建立组地址与端口的映射表，只向有成员的端口转发组播，避免二层泛洪。它不终结 IGMP，是二层优化手段，跨 VLAN 仍需三层组播路由。"
     }
   ],
-  "syllabus": "HCIP-Datacom 组播技术（IGMP 原理与版本）"
+  "syllabus": "HCIP-Datacom 组播技术（IGMP 及 IGMP Snooping 工作原理与版本差异）"
 }

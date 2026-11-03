@@ -9,35 +9,42 @@
     "简单网络管理协议",
     "MIB",
     "OID",
-    "网管"
+    "网管",
+    "NMS"
   ],
-  "one": "用于监控和管理网络设备的应用层协议，基于 UDP。",
-  "analogy": "SNMP 就像给设备装了个标准化的仪表盘和遥控器。网管软件是司机，通过仪表盘（MIB）读取车速、油量（设备状态），也能按按钮（Set）调整空调温度（配置）。设备厂商按同一套仪表盘标准（SMI）造表，所以一个司机能开所有品牌的车。",
-  "body": "## 为什么需要 SNMP\n\n网络设备数量多、分布广，管理员不可能逐台登录查看状态。SNMP 提供统一的框架，让网管系统（NMS）远程读取和修改设备的管理信息，实现集中监控和批量配置。\n\n## SNMP 架构\n\nSNMP 采用 Manager/Agent 模型：\n\n- **NMS（Manager）**：网管工作站，发起请求、接收告警。\n- **Agent**：运行在被管设备上的进程，响应请求、主动上报 Trap。\n- **MIB（Management Information Base）**：树形结构的被管对象数据库，每个对象用 OID（Object Identifier）唯一标识。\n- **SMI（Structure of Management Information）**：定义 MIB 对象的语法和类型，保证跨厂商兼容。\n\n## 协议版本\n\n| 版本 | 安全机制 | 说明 |\n|------|----------|------|\n| SNMPv1 | 团体名（community）明文 | 功能简单，安全性差 |\n| SNMPv2c | 团体名明文 | 增加 GetBulk、Inform，性能提升 |\n| SNMPv3 | USM（认证+加密）、VACM | 支持认证（MD5/SHA）和加密（DES/AES），安全性高 |\n\nHCIA 阶段重点掌握 v2c 和 v3 的基本配置。\n\n## 报文类型与操作\n\nSNMP 报文封装在 UDP 中，Agent 默认监听 161 端口，Trap 默认目的端口 162。\n\n| 操作 | 方向 | 作用 |\n|------|------|------|\n| GetRequest | Manager→Agent | 读取一个或多个 OID 的值 |\n| GetNextRequest | Manager→Agent | 读取下一个 OID 的值，用于遍历 MIB 树 |\n| GetBulkRequest | Manager→Agent | v2c 起支持，一次返回多个连续 OID，提高效率 |\n| SetRequest | Manager→Agent | 修改 OID 的值（配置设备） |\n| Response | Agent→Manager | 响应上述请求 |\n| Trap | Agent→Manager | 主动上报事件（如接口 down），无确认 |\n| Inform | Agent→Manager | v2c 起支持，带确认的 Trap |\n\n## 报文格式（以 v2c 为例）\n\nSNMP 报文采用 BER 编码的 ASN.1 结构，主要字段：\n\n- **version**：版本号（0=v1，1=v2c，3=v3）。\n- **community**：团体名，相当于明文密码。\n- **PDU type**：操作类型（0=Get，1=GetNext，2=Response，3=Set，4=Trap，5=GetBulk，6=Inform）。\n- **request-id**：请求标识，用于匹配请求和响应。\n- **error-status / error-index**：错误码和错误位置。\n- **variable-bindings**：OID 和值的列表。\n\n## MIB 与 OID\n\nMIB 是树形结构，根节点下分支，每个节点有编号和名称。例如：\n\n- `1.3.6.1.2.1` 是 mib-2，标准 MIB。\n- `1.3.6.1.2.1.1.5` 是 sysName，设备名称。\n- `1.3.6.1.2.1.2.2.1.10` 是 ifInOctets，接口入字节数。\n\n厂商私有 MIB 在 `1.3.6.1.4.1` 下，华为企业号是 2011。\n\n## SNMPv3 安全机制\n\nSNMPv3 引入 USM（User-based Security Model）和 VACM（View-based Access Control Model）：\n\n- **认证**：确保报文来源真实，常用 HMAC-MD5-96 或 HMAC-SHA-96。\n- **加密**：对报文载荷加密，常用 DES 或 AES-128。\n- **VACM**：基于视图控制用户能访问哪些 OID 子树。\n\n安全级别：noAuthNoPriv、authNoPriv、authPriv。\n\n## 设计取舍\n\n- 基于 UDP：开销小、实现简单，但不可靠，靠超时重传；Trap 可能丢失，重要事件用 Inform。\n- 团体名明文：v1/v2c 部署简单但安全性差，生产环境建议 v3。\n- MIB 标准化：保证互操作，但厂商私有 MIB 导致部分功能依赖厂商网管。\n\n## 与相邻技术分工\n\n- **SNMP**：监控和简单配置，适合周期性采集。\n- **NETCONF/YANG**：更现代、事务化的配置管理，适合自动化编排。\n- **Syslog**：日志上报，与 SNMP Trap 互补。\n- **Telemetry**：高速、亚秒级推送，适合大规模实时监控。\n\nHCIA 阶段要求能配置 SNMP 团体名、版本、Trap 目的主机，并能用网管软件读取设备信息。",
+  "one": "用 Manager/Agent 加 MIB 树来读写设备运行状态的 UDP 管理协议。",
+  "analogy": "把设备想成一栋大楼，里面每个房间都有编号（OID），房间里放着温度计、电表、开关。网管就是物业办公室，手里有一本楼层索引（MIB），想查什么就报房间号让楼里的值班员（Agent）去看一眼，或者直接叫他把某个开关扳上去（Set）。物业不会自己跑上楼，全靠值班员传话，所以值班员忙不过来时，报上来的数字就慢半拍。",
+  "body": "# 为什么还要 SNMP\n\n设备开局总要有人盯着看。CLI 是给人用的，一台两台可以手工敲 `display interface`，上千台核心、汇聚、接入堆在那里，人眼看不过来，更谈不上画趋势图、做阈值告警。SNMP 解决的就是\"机器问机器\"这件事：NMS（Network Management Station）按统一格式向设备取数，设备按统一格式回答，中间的\"统一格式\"就是 MIB 和 SMI 定义的骨架。\n\n它不追求实时和高吞吐，追求的是**极简**和**普适**——UDP 承载、TLV 编码、无连接，交换机主控 CPU 用很小的代价就能实现。这是它三十年不倒的原因，也是它在大规模秒级采集场景里被 Telemetry/gNMI 取代的原因。两者不是替代关系，是分工：SNMP 管配置、告警、慢速轮询，Telemetry 管高频指标流。\n\n# 三个角色与两种模型\n\n- **Manager（NMS）**：主动发起 Get/Set 请求，接收 Trap/Inform。\n- **Agent**：跑在设备上，解析 OID、读本地 MIB 变量、回 Response。\n- **MIB**：被管对象的树形定义，本身不是数据，是\"数据结构的说明书\"。\n\n协议上分两个模型：**organizational model**（SMI 定义数据类型与 MIB 结构，ASN.1 编码）和 **communication model**（SNMP 报文本身的交互方式）。SMI 决定了整数、字符串、OID、Counter32/Gauge32/TimeTicks 怎么编码，报文体一律走 **BER（Basic Encoding Rules）**，即 TLV 三段式：Tag（类型）、Length（长度）、Value（值）。这就是为什么抓包看到的 SNMP 报文是一串十六进制而不是可读文本。\n\n# MIB 树与 OID\n\n所有对象挂在一棵全局树上，根无名字，往下是 `iso(1)` → `org(3)` → `dod(6)` → `internet(1)`，于是所有标准对象都以 `1.3.6.1` 开头。常用分支：\n\n| 分支 | 含义 |\n|---|---|\n| 1.3.6.1.2.1 | mib-2，标准接口/系统/路由/IP 等 |\n| 1.3.6.1.2.1.1 | system 组，sysName、sysDescr、sysUpTime |\n| 1.3.6.1.2.1.2.2.1 | ifTable 的 ifEntry，ifIndex/ifDescr/ifOperStatus |\n| 1.3.6.1.2.1.4.20 | ipAddrTable，设备接口 IP |\n| 1.3.6.1.4.1.2011 | 华为企业私有分支 |\n\n叶子节点才是能读的值。表对象（table）在树上表现为 `table → entry → column`，实际实例化成 `column.OID + 索引`，例如 `ifDescr.1`、`ifDescr.2`，索引就是 ifIndex。这一点排错时最常踩：**访问表必须带索引后缀**，只给 column 的 OID，GET 会返回 noSuchInstance。\n\n# 五个 PDU 与一次完整交互\n\nSNMPv2c 定义了这几类操作：\n\n- **GetRequest**：取一个或多个 OID，成组发（GetBulk 之前版本只能靠多条 Get 拼）。\n- **GetNextRequest**：沿着树\"下一个\"取，遍历表靠它——拿不到索引时用 GetNext 逐个探，直到返回的 OID 跑出目标子树，这就是 MIB walk 的原理。\n- **GetBulkRequest**（v2c 起）：一次要一批，带 `non-repeaters` 和 `max-repetitions` 两个字段，把表遍历从 O(n) 次往返压到几次，这是 v2c 相对 v1 最实用的改进。\n- **SetRequest**：写对象，通常要 write view 授权，风险最高，生产上一般禁用或只开特定 OID。\n- **Response**：Agent 回包，带 errorStatus/errorIndex；`errorStatus=noSuchName`（v1）或 `noSuchObject/noSuchInstance`（v2c 的 exception 值）表示 OID 不存在。\n\n一次典型轮询：Manager 发 GetRequest（request-id=X，community=public），Agent 查 MIB 填值，回 Response（同 request-id）。**request-id 是唯一配对的键**，NMS 侧靠它把回包和请求对上，超时就靠它判定丢包。\n\n# Trap、Inform 与告警路径\n\n轮询是拉，Trap 是推。设备侧发生链路 up/down、CPU 越限、配置变更时，Agent 主动往 NMS 的 **162/udp** 发 Trap。\n\n- **Trap**：无确认，发出去就不管，UDP 丢了就丢了，NMS 不知道。Trap 报文里带 `sysUpTime` 和 `snmpTrapOID` 两个强制 varbind，前者用于判断设备是否重启过（时间戳突然变小 = 重启）。\n- **Inform**（v2c 起）：带确认，NMS 收到回 Response，Agent 收不到就重传，可靠性高但占资源。\n\n取舍很直白：**要可靠用 Inform，要省资源用 Trap**。现网常见做法是关键告警用 Inform，海量低价值告警用 Trap。\n\n# 版本演进：v1 / v2c / v3\n\n| 版本 | 认证 | 关键能力 | 问题 |\n|---|---|---|---|\n| v1 | community 明文 | Get/GetNext/Set/Trap | 无 Bulk，效率低 |\n| v2c | community 明文 | 加 GetBulk、Inform、Counter64 | community 明文传输，等于裸奔 |\n| v3 | USM 用户 + 认证加密 | 认证（MD5/SHA）、加密（DES/AES） | 配置复杂，CPU 开销高于 v2c |\n\nv3 的 USM（User-based Security Model）用 `engineID + userName` 定位用户，认证保证报文不被篡改、加密保证内容不被看。安全级别三档：`noAuthNoPriv`、`authNoPriv`、`authPriv`。生产环境只要不是隔离管理网，必须上 v3 authPriv——现网扫 `public` 的脚本多如牛毛，v2c 的 community 在链路上是明文，抓包即得。\n\n# 版本间的不兼容点\n\nv3 与 v2c 的报文头结构完全不同，v3 多了 msgGlobalData（msgID、msgMaxSize、msgFlags、msgSecurityModel）和 msgSecurityParameters，还有 **discovery 过程**：Manager 先发一个空的 probe 报文，Agent 回 report 告知自己的 engineID 和时间同步（authoritative engine boots/time），之后才走正常认证。所以 v3 配不通时，先确认 NMS 有没有拿到 engineID，这是第一现场。\n\n# 设计上的取舍\n\n- **UDP 而非 TCP**：省握手、省连接状态，设备侧实现轻；代价是丢包无感知、大表遍历慢。\n- **无连接、无会话**：每个请求独立，Agent 不需要维护 per-manager 状态；代价是 community 每次都要带，鉴权开销在报文里。\n- **轮询而非订阅**：NMS 决定采集节奏，设备不感知谁在关心什么；代价是周期长、有延迟，靠 Trap 补实时性。\n- **MIB 全局唯一命名**：好处是跨厂商互通，坏处是标准 MIB 覆盖不到厂商私有特性，于是有了 `1.3.6.1.4.1.2011` 这类私有分支。\n\n# 与周边技术的分工\n\nSNMP 不等于网络自动化。**SNMP 面向监控与状态读取**，配置下发靠 CLI/NETCONF/RESTCONF；**Telemetry** 用 gRPC 推流做秒级指标，SNMP 已跟不上；**Syslog** 传文本日志，SNMP Trap 传结构化事件，两者常并行部署。华为设备上 SNMP 与这些是并存关系：`snmp-agent` 只管自己的 161/162 端口和 MIB 视图。\n\n# 华为 VRP 上的实现要点\n\n- `snmp-agent` 是总开关，配 community 或 v3 用户会自动拉起。\n- `snmp-agent community read/write` 决定只读/读写权限，可加 ACL 限制源地址——这是最低成本的加固。\n- `snmp-agent sys-info` 指定 version、contact、location；`snmp-agent trap enable` 打开具体 Trap 类型（如 `snmp-agent trap enable feature-name ifnet`）。\n- `snmp-agent target-host trap address udp-domain x.x.x.x params securityname xxx v3 privacy` 配置 Trap 目的，v3 场景要写成 Inform 才能带确认。\n- `snmp-agent mib-view` 做视图裁剪，只暴露必要子树，避免 `public` 用户把整棵 MIB 树看光。\n- 表遍历慢的现场，优先调大 GetBulk 的 max-repetitions，而不是加并发。",
   "cmds": [
     "display snmp-agent sys-info",
     "display snmp-agent community",
     "display snmp-agent target-host",
+    "display snmp-agent statistics",
     "display snmp-agent mib-view"
   ],
   "pits": [
-    "团体名区分大小写，读写权限要分别配置",
-    "Trap 目的端口默认 162，注意 ACL 放行",
-    "SNMPv3 用户认证和加密算法两端必须一致",
-    "GetBulk 的 max-repetitions 过大会导致响应分片"
+    "表对象访问必须带 ifIndex 索引后缀，否则返回 noSuchInstance",
+    "v2c community 明文传输，务必配 ACL 限定 NMS 源地址",
+    "v3 配不通先查 engineID 发现，NMS 侧没拿到就认证失败",
+    "Trap 走 162/udp，防火墙只放 161 会导致告警全丢",
+    "GetBulk max-repetitions 过大易触发设备 CPU 告警，需逐步调"
   ],
   "qa": [
     {
-      "q": "SNMPv2c 和 SNMPv3 的主要区别是什么？",
-      "a": "v2c 使用明文团体名，无认证加密；v3 增加 USM 认证加密和 VACM 视图控制，安全性更高。"
+      "q": "SNMPv2c 相比 v1 的关键改进是什么？",
+      "a": "增加 GetBulk 批量取数（非重复者+最大重复数）、Inform 带确认告警、Counter64 大计数器，以及 exception 值替代 v1 的 noSuchName。"
     },
     {
-      "q": "Trap 和 Inform 的区别？",
-      "a": "Trap 无确认，可能丢失；Inform 带确认，Agent 收到响应才停止重传，更可靠。"
+      "q": "Trap 和 Inform 怎么选？",
+      "a": "Trap 无确认、开销小，UDP 丢了就丢；Inform 有 Response 确认和重传，可靠性高但占资源。关键告警用 Inform，海量低级告警用 Trap。"
     },
     {
-      "q": "SNMP 基于哪个传输层协议？端口是多少？",
-      "a": "基于 UDP，Agent 监听 161，Trap 默认发往 162。"
+      "q": "SNMPv3 的 USM 解决了什么问题？",
+      "a": "把 v1/v2c 的明文 community 换成引擎 ID+用户名的用户模型，提供认证（防篡改）和加密（防窃听），分 noAuthNoPriv/authNoPriv/authPriv 三档。"
+    },
+    {
+      "q": "为什么 GetNext 能遍历整张表？",
+      "a": "它按字典序返回比给定 OID 大的下一个实例，NMS 循环取值直到返回的 OID 跳出目标子树，即可枚举出所有列+索引组合。"
     }
   ],
   "syllabus": "HCIA-Datacom 自动化技术"
