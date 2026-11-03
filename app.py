@@ -389,6 +389,9 @@ def run_checks(lab, step, record=True, source="check"):
     st = read_json(state_path(lab["id"]), None)
     if not st:
         return {"ok": False, "error": "环境还没搭，先点「一键搭建」"}
+    if lab.get("mode") == "troubleshoot" and lab.get("inject") and not st.get("injected"):
+        inject_lab(lab)
+        st = read_json(state_path(lab["id"]), st) or st
     results = []
     cks = list(step.get("check", [])) + [dict(x, keep=True) for x in step.get("keep", [])]
     for ck in cks:
@@ -1635,6 +1638,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(kb_add(str(data.get("title") or ""),
                                          str(data.get("level") or "HCIA"),
                                          str(data.get("cat") or "交换")))
+
+        m = re.fullmatch(r"/api/quiz/([^/]+)/answer", path)
+        if m:
+            qs = parse_qs(urlparse(self.path).query)
+            choice = (qs.get("choice") or [str(data.get("choice", ""))])[0]
+            return self.send_json(quiz_answer(m.group(1), choice))
 
         if path == "/api/exam":
             ids = [i for i in (data.get("lab_ids") or []) if get_lab(i)]
