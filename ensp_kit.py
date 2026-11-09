@@ -222,7 +222,14 @@ class Vrp:
         self._dec.reset()
         self.s = socket.create_connection((self.host, self.port), timeout=5)
         self.s.sendall(b"\r")
-        return self.read(self.timeout)
+        text = self.read(self.timeout)
+        if "press any key to log on" in text.lower():
+            self.s.sendall(b"\r")
+            text += self.read(self.timeout)
+        if "Password:" in text or "Login authentication" in text:
+            self.close()
+            raise RuntimeError("console 已启用登录密码，当前需要先恢复无密码 console")
+        return text
 
     def _drain(self):
         self.s.settimeout(0.15)

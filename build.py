@@ -10,7 +10,7 @@ NAME = "网络实验陪练"
 OUT = os.path.join(DIST, NAME)
 
 COPY_APP = ["app.py", "ai.py", "ailab.py", "ensp_kit.py", "doctor.py", "mcp_server.py",
-            "vrp_security.py", "vrp_config.py", "learning.py",
+            "vrp_security.py", "vrp_config.py", "learning.py", "studio.py", "terminal_ws.py",
             "gen_kb.py", "labs", "kb", "quiz", "web"]
 SKIP_LIB = {"test", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3",
             "distutils", "pydoc_data", "site-packages", "turtledemo"}

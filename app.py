@@ -17,6 +17,8 @@ sys.path.insert(0, BASE)
 import ai
 import ailab
 import doctor as doctor_mod
+import studio
+import terminal_ws
 from ensp_kit import Vrp, build_topo
 from learning import build_review_plan
 from vrp_config import build_expected, compare_config, parse_config
@@ -78,6 +80,7 @@ def list_labs():
                 "syllabus": lab.get("syllabus", []),
                 "mode": lab.get("mode", ""),
                 "variantTitle": lab.get("variant_title", ""),
+                "sandbox": bool(lab.get("sandbox")),
             })
     return out
 
@@ -1331,6 +1334,86 @@ def collect_snapshot(lab, limit=2200):
     return out
 
 
+def capture_lab_snapshot(lab, label=""):
+    st = read_state(lab["id"])
+    if not st:
+        return {"ok": False, "error": "还没搭环境，先打开并启动设备"}
+    snap = collect_snapshot(lab, limit=1024 * 1024)
+    console_devices = [d["name"] for d in lab.get("devices", [])
+                       if d.get("model") != "PC"]
+    missing = [name for name in console_devices if not snap.get(name)
+               or str(snap.get(name, "")).startswith("<读不到配置")]
+    if missing:
+        return {"ok": False, "error": "这些设备还没启动或配置读取失败：" + "、".join(missing)}
+    configs = {}
+    for name in console_devices:
+        model = next(d["model"] for d in lab["devices"] if d["name"] == name)
+        configs[name] = {"model": model, "config": snap[name]}
+    try:
+        item = studio.save_snapshot(WORK_DIR, lab, configs, label=label,
+                                    variant=lab.get("variant_id", ""))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "snapshot": {"id": item["id"], "label": item["label"],
+                                     "at": item["at"], "devices": len(item["devices"])}}
+
+
+def restore_lab_snapshot(lab, snapshot):
+    st = read_state(lab["id"])
+    if not st:
+        return {"ok": False, "error": "还没搭环境，先启动设备再恢复快照"}
+    try:
+        configs = studio.validate_snapshot(snapshot, lab)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    report = []
+    for name, info in configs.items():
+        port = st.get("ports", {}).get(name)
+        if not port or not probe(port, 0.3):
+            report.append({"dev": name, "ok": False, "message": "设备没启动"})
+            continue
+        commands = studio.config_commands(info.get("config", ""))
+        if not commands:
+            report.append({"dev": name, "ok": False, "message": "快照里没有可重放的配置"})
+            continue
+        failures = []
+        warnings = []
+        try:
+            c = Vrp("127.0.0.1", port, timeout=25)
+            c.open()
+            c.cmd("return", 6)
+            c.cmd("screen-length 0 temporary", 6)
+            for line in ["system-view"] + commands + ["return"]:
+                out = c.cmd(line, 30)
+                for issue in _bad_lines(line, out):
+                    if studio.restore_issue_is_warning(line, issue):
+                        warnings.append(issue)
+                    else:
+                        failures.append(issue)
+            c.close()
+            audit_commands(lab["id"], name, commands, "snapshot-restore", not failures)
+            report.append({"dev": name, "ok": not failures,
+                           "message": "" if not failures else "；".join(failures[:8]),
+                           "warnings": warnings[:8], "commands": len(commands)})
+        except Exception as exc:
+            report.append({"dev": name, "ok": False, "message": str(exc)})
+        time.sleep(0.5)
+    return {"ok": all(row["ok"] for row in report), "report": report}
+
+
+def save_topology_lab(payload):
+    existing = get_lab(payload.get("id")) if payload.get("id") else None
+    lab = studio.build_sandbox_lab(payload, existing)
+    if existing and existing.get("id") == lab["id"]:
+        for path in (state_path(lab["id"]), os.path.join(WORK_DIR, lab["id"] + ".topo")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    write_json(resource_path(GEN_DIR, lab["id"]), lab)
+    return {"ok": True, "lab": public_lab(lab)}
+
+
 def build_diag_prompt(lab, step, snap, diff=None):
     lines = [f"【实验】{lab['title']}：{lab['subtitle']}"]
     if step:
@@ -1706,6 +1789,7 @@ def _chat_messages(data):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "ensp-lab/1.0"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         pass
@@ -1717,6 +1801,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.end_headers()
         self.wfile.write(b)
 
@@ -1754,7 +1840,7 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
             raise ValueError("Content-Length 无效")
-        if n < 0 or n > 1024 * 1024:
+        if n < 0 or n > 6 * 1024 * 1024:
             raise ValueError("请求体过大")
         if not n:
             return {}
@@ -1773,8 +1859,50 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_allowed():
             return self.send_json({"ok": False, "error": "请在 127.0.0.1 或 localhost 打开"}, 403)
         path = urlparse(self.path).path
+        if path == "/ws/terminal":
+            return self.handle_terminal()
         if path == "/api/session":
             return self.send_json({"ok": True, "token": SESSION_TOKEN})
+        if path == "/api/topology/capabilities":
+            return self.send_json({"ok": True, "models": studio.capabilities()})
+        m = re.fullmatch(r"/api/lab/([^/]+)/snapshots", path)
+        if m:
+            try:
+                items = studio.list_snapshots(WORK_DIR, m.group(1))
+            except ValueError:
+                return self.send_json({"ok": False, "error": "实验 ID 无效"}, 400)
+            return self.send_json({"ok": True, "items": items})
+        m = re.fullmatch(r"/api/lab/([^/]+)/snapshots/([^/]+)", path)
+        if m:
+            try:
+                item = studio.load_snapshot(WORK_DIR, m.group(1), m.group(2))
+            except ValueError:
+                item = None
+            return self.send_json(item) if item else self.send_json(
+                {"ok": False, "error": "没有这个快照"}, 404)
+        m = re.fullmatch(r"/api/lab/([^/]+)/export-sandbox", path)
+        if m:
+            lab = get_lab(m.group(1))
+            if not lab:
+                return self.send_json({"ok": False, "error": "没有这个实验"}, 404)
+            metas = studio.list_snapshots(WORK_DIR, lab["id"])
+            snapshots = []
+            for meta in metas:
+                item = studio.load_snapshot(WORK_DIR, lab["id"], meta["id"])
+                if item:
+                    snapshots.append(item)
+            data = studio.zip_bytes(lab, snapshots)
+            filename = "sandbox-" + lab["id"] + ".zip"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.close_connection = True
+            self.end_headers()
+            self.wfile.write(data)
+            return
         m = re.fullmatch(r"/api/lab/([^/]+)", path)
         if m:
             lab = get_lab(m.group(1))
@@ -1787,11 +1915,11 @@ class Handler(BaseHTTPRequestHandler):
                 prog["done"] = []
             return self.send_json({"ok": True, "lab": public_lab(lab), "progress": prog})
         if path == "/api/labs":
-            status = ai.status()
+            ai_status = ai.status()
             return self.send_json({"ok": True, "labs": list_labs(),
-                                   "ai": status["configured"],
-                                   "aiCloud": status["cloud"],
-                                   "aiPrivacy": status["privacy"],
+                                   "ai": ai_status["configured"],
+                                   "aiCloud": ai_status["cloud"],
+                                   "aiPrivacy": ai_status["privacy"],
                                    "calibrated": bool(_load_cfg().get("start_offset"))})
         if path == "/api/exam":
             return self.send_json(exam_view())
@@ -1876,6 +2004,62 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/chat/stream":
             return self.handle_chat_stream(data)
 
+        if path == "/api/topology/save":
+            try:
+                return self.send_json(save_topology_lab(data))
+            except (ValueError, TypeError) as exc:
+                return self.send_json({"ok": False, "error": str(exc)}, 400)
+
+        if path == "/api/sandbox/import":
+            try:
+                raw = studio.decode_base64(str(data.get("data") or ""))
+                lab, snapshots = studio.read_import_package(raw)
+                write_json(resource_path(GEN_DIR, lab["id"]), lab)
+                for item in snapshots:
+                    studio.save_snapshot(WORK_DIR, lab, item.get("devices") or {},
+                                         label=item.get("label", ""),
+                                         variant=item.get("variant", ""))
+            except (ValueError, TypeError) as exc:
+                return self.send_json({"ok": False, "error": str(exc)}, 400)
+            return self.send_json({"ok": True, "lab": public_lab(lab),
+                                   "snapshots": len(snapshots)})
+
+        m = re.fullmatch(r"/api/lab/([^/]+)/snapshots", path)
+        if m:
+            lab = get_lab(m.group(1))
+            if not lab:
+                return self.send_json({"ok": False, "error": "没有这个实验"}, 404)
+            return self.send_json(capture_lab_snapshot(lab, str(data.get("label") or "")))
+
+        m = re.fullmatch(r"/api/lab/([^/]+)/snapshots/([^/]+)/restore", path)
+        if m:
+            lab = get_lab(m.group(1))
+            if not lab:
+                return self.send_json({"ok": False, "error": "没有这个实验"}, 404)
+            if data.get("confirm") is not True:
+                return self.send_json({"ok": False, "error": "恢复快照需要明确确认"}, 400)
+            try:
+                item = studio.load_snapshot(WORK_DIR, lab["id"], m.group(2))
+            except ValueError:
+                item = None
+            if not item:
+                return self.send_json({"ok": False, "error": "没有这个快照"}, 404)
+            backup = capture_lab_snapshot(lab, "恢复前自动快照")
+            if not backup.get("ok"):
+                return self.send_json({"ok": False,
+                                       "error": "恢复前无法自动留档：" + backup.get("error", "")})
+            result = restore_lab_snapshot(lab, item)
+            result["backup"] = backup.get("snapshot")
+            return self.send_json(result)
+
+        m = re.fullmatch(r"/api/lab/([^/]+)/snapshots/([^/]+)/delete", path)
+        if m:
+            try:
+                removed = studio.delete_snapshot(WORK_DIR, m.group(1), m.group(2))
+            except ValueError:
+                removed = False
+            return self.send_json({"ok": removed, "error": "" if removed else "没有这个快照"})
+
         if path == "/api/config":
             cfg_path = os.path.join(BASE, "config.json")
             cfg = read_json(cfg_path, {})
@@ -1895,9 +2079,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": False, "error": "cloud_enabled 必须是布尔值"}, 400)
                 cfg["cloud_enabled"] = data["cloud_enabled"]
             write_json(cfg_path, cfg)
-            status = ai.status()
-            return self.send_json({"ok": True, "ai": status["configured"],
-                                   "aiCloud": status["cloud"], "aiPrivacy": status["privacy"]})
+            ai_status = ai.status()
+            return self.send_json({"ok": True, "ai": ai_status["configured"],
+                                   "aiCloud": ai_status["cloud"], "aiPrivacy": ai_status["privacy"]})
 
         if path == "/api/doctor":
             items = doctor_mod.check_all()
@@ -1995,13 +2179,24 @@ class Handler(BaseHTTPRequestHandler):
             if action == "save":
                 return self.send_json(save_all(lab))
             if action == "delete":
-                if lab.get("source") != "ai":
-                    return self.send_json({"ok": False, "error": "经典实验不能删"})
-                for p in (os.path.join(GEN_DIR, lab["id"] + ".json"), state_path(lab["id"]),
+                if lab.get("source") not in ("ai", "user") and not lab.get("sandbox"):
+                    return self.send_json({"ok": False, "error": "内置实验不能删"})
+                for p in (resource_path(GEN_DIR, lab["id"]), state_path(lab["id"]),
                           progress_path(lab["id"]), hist_path(lab["id"]),
                           os.path.join(WORK_DIR, lab["id"] + ".topo")):
                     try:
                         os.remove(p)
+                    except (OSError, ValueError):
+                        pass
+                folder = studio.snapshots_dir(WORK_DIR, lab["id"])
+                if os.path.isdir(folder):
+                    for name in os.listdir(folder):
+                        try:
+                            os.remove(os.path.join(folder, name))
+                        except OSError:
+                            pass
+                    try:
+                        os.rmdir(folder)
                     except OSError:
                         pass
                 JOBS.pop(lab["id"], None)
@@ -2044,6 +2239,27 @@ class Handler(BaseHTTPRequestHandler):
                         bump(lab["id"], step["id"], "apply")
                     return self.send_json(r)
         return self.send_json({"ok": False, "error": "no route"}, 404)
+
+    def handle_terminal(self):
+        query = parse_qs(urlparse(self.path).query)
+        token = (query.get("token") or [""])[0]
+        if not self._origin_allowed() or not secrets.compare_digest(token, SESSION_TOKEN):
+            return self.send_json({"ok": False, "error": "终端会话校验失败"}, 403)
+        lab = get_lab((query.get("lab_id") or [""])[0])
+        device = (query.get("device") or [""])[0]
+        if not lab:
+            return self.send_json({"ok": False, "error": "没有这个实验"}, 404)
+        state = read_state(lab["id"])
+        port = (state or {}).get("ports", {}).get(device)
+        try:
+            terminal_ws.serve(self, int(port or 0), lab["id"], device)
+        except ValueError as exc:
+            try:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                pass
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def handle_chat(self, data):
         msgs, lab, step, question = _chat_messages(data)
@@ -2118,9 +2334,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; script-src 'self' 'unsafe-inline'; "
                          "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                         "connect-src 'self'; frame-ancestors 'none'")
+                         "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; "
+                         "frame-ancestors 'none'")
         if ext in (".html", ".js", ".css"):
             self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.end_headers()
         self.wfile.write(b)
 

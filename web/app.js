@@ -142,6 +142,8 @@ function renderLabs() {
     const d = el("div", "lab" + (S.lab && S.lab.id === l.id ? " on" : ""));
     const b = el("b", null, l.title);
     if (l.source === "ai") b.appendChild(el("span", "tag", "AI"));
+    if (l.source === "user") b.appendChild(el("span", "tag", "自定义"));
+    if (l.sandbox) b.appendChild(el("span", "tag", "沙箱"));
     if (l.verified) b.appendChild(el("span", "tag ok", "已试跑"));
     d.appendChild(b);
     d.appendChild(el("span", null, l.subtitle));
@@ -150,7 +152,7 @@ function renderLabs() {
     m.appendChild(el("span", null, l.steps + " 步"));
     m.appendChild(el("span", null, "约 " + l.minutes + " 分钟"));
     d.appendChild(m);
-    if (l.source === "ai") {
+    if (l.source === "ai" || l.source === "user" || l.sandbox) {
       const x = el("span", "del", "×");
       x.title = "删掉这个实验";
       x.onclick = (e) => delLab(l.id, e);
@@ -204,7 +206,13 @@ async function selectLab(id) {
   localStorage.setItem("lab", id);
   $("#empty").classList.add("hidden");
   $("#stepCard").classList.remove("hidden");
+  const sandbox = !!S.lab.sandbox || S.lab.mode === "sandbox";
+  $("#stepCard").classList.toggle("sandbox-card", sandbox);
+  $("#btnGrade").classList.toggle("hidden", sandbox);
   renderLabs(); renderStepper(); showStep(S.stepId);
+  if (sandbox) {
+    notice("自由拓扑沙箱不计分。先一键搭建，启动设备后用「Web 终端」配置，或用「快照」保存状态。");
+  }
   refreshStatus();
 }
 
@@ -1181,6 +1189,11 @@ on("#examClose", () => $("#examModal").classList.add("hidden"));
 on("#examSave", saveExam);
 on("#gradeClose", () => $("#gradeModal").classList.add("hidden"));
 on("#btnGen", openGen);
+on("#btnTopology", () => window.Studio.openTopology(S.lab));
+on("#btnTerminal", () => window.Studio.openTerminal(S.lab));
+on("#btnSnapshots", () => window.Studio.openSnapshots(S.lab));
+on("#btnSandboxExport", () => window.Studio.exportSandbox(S.lab));
+on("#btnSandboxImport", () => window.Studio.chooseSandboxImport());
 on("#aiHead", () => openAiSettings());
 on("#aiClose", () => closeAiSettings(false));
 on("#aiCancel", () => closeAiSettings(false));
@@ -1210,6 +1223,11 @@ document.addEventListener("keydown", (e) => {
   else if (k === "k") { e.preventDefault(); openKB(); }
 });
 on("#runBack", closeGen);
+window.addEventListener("studio:labs-changed", async (event) => {
+  await refreshLabs();
+  const id = event.detail && event.detail.select;
+  if (id && S.labs.some((lab) => lab.id === id)) await selectLab(id);
+});
 
 on("#btnDiscover", async () => {
   if (!S.lab) return;

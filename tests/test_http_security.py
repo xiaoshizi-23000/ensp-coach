@@ -75,12 +75,20 @@ class LocalApiSecurityTests(unittest.TestCase):
         status, _ = self.request("GET", "/api/session", host="evil.example")
         self.assertEqual(status, 403)
 
+    def test_terminal_rejects_bad_token(self):
+        status, data = self.request("GET", "/ws/terminal?token=bad&lab_id=tr-route&device=R1")
+        self.assertEqual(status, 403)
+        self.assertFalse(data.get("ok"))
+
     def test_static_path_traversal_is_rejected(self):
         status, _ = self.request("GET", "/../config.json")
         self.assertEqual(status, 404)
 
     def test_pages_and_readonly_routes_are_served(self):
-        for path in ("/", "/client.js", "/api/labs", "/api/review", "/api/course"):
+        paths = ("/", "/client.js", "/studio.js", "/api/labs", "/api/review", "/api/course",
+                 "/api/topology/capabilities", "/api/lab/tr-route/snapshots",
+                 "/api/lab/tr-route/status", "/api/lab/tr-route/export-sandbox")
+        for path in paths:
             with self.subTest(path=path):
                 status, _ = self.request("GET", path)
                 self.assertEqual(status, 200)

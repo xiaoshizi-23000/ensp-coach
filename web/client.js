@@ -64,4 +64,5 @@
 
   window.enspFetch = enspFetch;
   window.enspJSON = enspJSON;
+  window.enspGetToken = getToken;
 })();
