@@ -95,6 +95,84 @@
       "quit"
     ]
   },
+  "variants": [
+    {
+      "id": "wrong-access-vlan",
+      "title": "接入端口划错 VLAN",
+      "symptom": "PC1 能 ping 通自己的网关 192.168.10.1，但 ping 不通同网段的 PC2（192.168.10.20）。",
+      "intro": "两台 PC 在同一网段，经两台交换机互联。网关正常，说明问题更可能出在接入层 VLAN 或 Trunk 放行。",
+      "inject": {
+        "SW2": [
+          "system-view", "vlan batch 20",
+          "interface GigabitEthernet0/0/1", "port default vlan 20", "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-vlan-access",
+          "title": "定位并修复",
+          "brief": "先看现象、缩小范围、查 MAC 和接口 VLAN，把故障点找出来改回去。",
+          "why": "同网段二层不通时，要同时检查接入 VLAN、Trunk 放行和 MAC 学习。",
+          "hints": [
+            "先确认 PC1 的 IP、掩码、网关，再从 PC1 ping 网关和 PC2，判断故障范围。",
+            "在 SW1 上 display mac-address 看 PC2 的 MAC 是否学到，在 SW2 上检查 GE0/0/1 的 VLAN 划分。",
+            "在 SW2 的 GE0/0/1 接口下执行 port default vlan 10，恢复正确 VLAN。"
+          ],
+          "check": [
+            {"dev": "SW2", "cmd": "display current-configuration interface GigabitEthernet0/0/1", "expect": "port default vlan 10"},
+            {"dev": "SW1", "cmd": "ping -c 3 192.168.10.20", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "keep": [
+            {"dev": "SW1", "cmd": "ping -c 3 192.168.10.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "apply": {
+            "SW2": [
+              "system-view", "interface GigabitEthernet0/0/1",
+              "port default vlan 10", "quit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "trunk-missing-vlan",
+      "title": "Trunk 未放行 VLAN",
+      "symptom": "PC1 和 PC2 在同一 VLAN、地址配置正确，PC2 也能 ping 通自己的网关，但两台 PC 互 ping 不通。",
+      "intro": "两台交换机之间的链路是 Trunk。网关正常而跨交换机二层流量不通，需要重点核对 Trunk 放行列表。",
+      "inject": {
+        "SW2": [
+          "system-view", "interface GigabitEthernet0/0/2",
+          "undo port trunk allow-pass vlan 10", "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-vlan-trunk",
+          "title": "定位并修复",
+          "brief": "对比两端 Trunk 的放行 VLAN，并确认接入端口仍属于 VLAN 10。",
+          "why": "Trunk 默认只放行 VLAN 1，业务 VLAN 必须在两端显式放行。",
+          "hints": [
+            "从 PC1 ping PC2 和网关，判断是二层同网段问题还是网关转发问题。",
+            "在 SW2 上执行 display current-configuration interface GigabitEthernet0/0/2，查看 port trunk allow-pass vlan。",
+            "在 SW2 的 GE0/0/2 接口下补回 port trunk allow-pass vlan 10。"
+          ],
+          "check": [
+            {"dev": "SW2", "cmd": "display current-configuration interface GigabitEthernet0/0/2", "expect": "port trunk allow-pass vlan 10"},
+            {"dev": "SW1", "cmd": "ping -c 3 192.168.10.20", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "keep": [
+            {"dev": "SW1", "cmd": "ping -c 3 192.168.10.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "apply": {
+            "SW2": [
+              "system-view", "interface GigabitEthernet0/0/2",
+              "port trunk allow-pass vlan 10", "quit"
+            ]
+          }
+        }
+      ]
+    }
+  ],
   "steps": [
     {
       "id": "s1",

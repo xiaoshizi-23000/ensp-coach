@@ -1,7 +1,8 @@
 const S = {
   labs: [], lab: null, stepId: null, progress: { done: [] },
-  built: false, ai: false, hintLevel: 0, history: [], lastOutput: "", poll: null, busy: false,
-  exam: { items: [] }, calibrated: false
+  built: false, ai: false, aiCloud: true, aiPrivacy: "secrets",
+  hintLevel: 0, history: [], lastOutput: "", poll: null, busy: false,
+  exam: { items: [] }, calibrated: false, streaming: false, streamController: null
 };
 
 const $ = (s) => document.querySelector(s);
@@ -15,17 +16,36 @@ function setTheme(t) {
 setTheme(localStorage.getItem("theme") || "apple");
 
 async function api(path, body) {
-  const opt = body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-  };
-  const r = await fetch(path, opt);
-  return r.json();
+  return window.enspJSON(path, body);
 }
 
 function toast(t) {
   const n = $("#toast");
   n.textContent = t; n.classList.add("on");
   clearTimeout(n._t); n._t = setTimeout(() => n.classList.remove("on"), 2600);
+}
+
+function syncAiStatus(r) {
+  if (!r) return;
+  S.ai = !!r.ai;
+  S.aiCloud = r.aiCloud !== false;
+  S.aiPrivacy = r.aiPrivacy || "secrets";
+  const active = S.aiCloud ? S.ai : true;
+  $("#aiDot").className = "dot " + (active ? "on" : "off");
+  const privacy = { secrets: "标准脱敏", strict: "严格脱敏", off: "原样发送" }[S.aiPrivacy] || "";
+  $("#aiState").textContent = !S.aiCloud
+    ? "本地规则模式"
+    : (S.ai ? `DeepSeek · ${privacy}` : "DeepSeek 未配置");
+  const line = $("#privacyLine");
+  if (line) {
+    line.textContent = !S.aiCloud
+      ? "本地规则模式 · 设备配置不会发送到云端"
+      : S.aiPrivacy === "strict"
+        ? "严格脱敏 · IP 已替换，自动代做和生成实验暂停"
+        : S.aiPrivacy === "off"
+          ? "原样发送 · 配置中的地址和标识会发送到 DeepSeek"
+          : "标准脱敏 · 密码、密钥和团体名不会发送到云端";
+  }
 }
 
 function notice(html) {
@@ -81,13 +101,14 @@ function currentStep() {  if (!S.lab) return null;
 
 async function boot() {
   const r = await api("/api/labs");
-  S.labs = r.labs || []; S.ai = !!r.ai; S.calibrated = !!r.calibrated;
-  $("#aiDot").className = "dot " + (S.ai ? "on" : "off");
-  $("#aiState").textContent = S.ai ? "DeepSeek 已连接" : "DeepSeek 未配置";
+  S.labs = r.labs || []; S.calibrated = !!r.calibrated;
+  syncAiStatus(r);
   renderLabs();
   loadExam();
   loadKbSide();
-  if (S.labs.length) selectLab(S.labs[0].id);
+  const wanted = localStorage.getItem("lab");
+  const initial = S.labs.find((l) => l.id === wanted) || S.labs[0];
+  if (initial) selectLab(initial.id);
 }
 
 async function loadKbSide() {
@@ -145,9 +166,7 @@ function renderLabs() {
 async function refreshLabs() {
   const r = await api("/api/labs");
   S.labs = r.labs || [];
-  S.ai = !!r.ai;
-  $("#aiDot").className = "dot " + (S.ai ? "on" : "off");
-  $("#aiState").textContent = S.ai ? "DeepSeek 已连接" : "DeepSeek 未配置";
+  syncAiStatus(r);
   renderLabs();
 }
 
@@ -164,6 +183,7 @@ async function delLab(id, ev) {
 }
 
 async function selectLab(id) {
+  if (S.streaming) stopStream();
   stopPoll();
   const r = await api("/api/lab/" + id);
   if (!r.ok) return toast(r.error || "加载失败");
@@ -174,6 +194,7 @@ async function selectLab(id) {
   S.stepId = first.id;
   S.hintLevel = 0;
   S.lastOutput = "";
+  S.history = [];
   S.injected = false;
   S.labStart = Date.now();
   startClock();
@@ -294,6 +315,22 @@ async function doBuild() {
   const r = await api("/api/lab/" + S.lab.id + "/build", {});
   S.busy = false; $("#btnBuild").disabled = false;
   if (!r.ok) return toast(r.error || "生成失败");
+  if (r.lab) {
+    S.lab = r.lab;
+    const ids = new Set(S.lab.steps.map((s) => s.id));
+    S.progress.done = (S.progress.done || []).filter((id) => ids.has(id));
+    const first = S.lab.steps.find((s) => !S.progress.done.includes(s.id)) || S.lab.steps[0];
+    S.stepId = first.id;
+    S.hintLevel = 0;
+    S.lastOutput = "";
+    S.history = [];
+    S.injected = false;
+    $("#labTitle").textContent = S.lab.title;
+    $("#labSub").textContent = S.lab.subtitle;
+    renderStepper();
+    showStep(S.stepId);
+    renderMeta();
+  }
   const busyHint = (r.busy_ports || []).length
     ? `<br>注意：${r.busy_ports.join("、")} 这些端口还被上一次的设备占着，这次的 console 口已经帮你顺延到 ${r.busy_ports[r.busy_ports.length - 1] + 1} 开始。`
     : "";
@@ -556,26 +593,100 @@ function pushMsg(role, text) {
   return m;
 }
 
+function stopStream() {
+  if (S.streamController) S.streamController.abort();
+}
+
 async function send(text) {
+  if (S.streaming) return;
   const q = (text || $("#input").value || "").trim();
   if (!q) return;
-  if (!S.ai) { await setupKey(); if (!S.ai) return; }
+  if (S.aiCloud && !S.ai) {
+    const ok = await setupKey();
+    if (!ok || !S.ai) return;
+  }
   $("#input").value = "";
   pushMsg("me", q);
-  const wait = pushMsg("bot", "…");
-  const r = await api("/api/chat", {
-    lab_id: S.lab ? S.lab.id : "",
-    step_id: S.stepId,
-    question: q,
-    last_output: S.lastOutput,
-    history: S.history.slice(-6)
-  });
-  if (r.ok) {
-    wait.textContent = r.content;
-    S.history.push({ role: "user", content: q }, { role: "assistant", content: r.content });
-  } else {
-    wait.className = "msg err";
-    wait.textContent = r.error || "调用失败";
+  const wait = pushMsg("bot", "");
+  wait.classList.add("streaming");
+  const btn = $("#btnSend");
+  S.streaming = true;
+  S.streamController = new AbortController();
+  btn.textContent = "停止";
+  let content = "";
+  let streamError = "";
+  try {
+    const response = await window.enspFetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lab_id: S.lab ? S.lab.id : "",
+        step_id: S.stepId,
+        question: q,
+        last_output: S.lastOutput,
+        history: S.history.slice(-6)
+      }),
+      signal: S.streamController.signal
+    });
+    const kind = response.headers.get("Content-Type") || "";
+    if (kind.includes("application/json")) {
+      const data = await response.json();
+      if (!data.ok) throw new Error(data.error || "调用失败");
+      content = data.content || "";
+      wait.textContent = content;
+    } else {
+      if (!response.ok || !response.body) throw new Error(`请求失败（HTTP ${response.status}）`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const consume = (block) => {
+        let event = "message";
+        const data = [];
+        block.split("\n").forEach((line) => {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+        });
+        if (!data.length) return;
+        let payload = {};
+        try { payload = JSON.parse(data.join("\n")); } catch (e) { return; }
+        if (event === "delta" && payload.text) {
+          content += payload.text;
+          wait.textContent = content;
+          $("#chat").scrollTop = $("#chat").scrollHeight;
+        } else if (event === "error") {
+          streamError = payload.error || "流式调用失败";
+        }
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          consume(block);
+        }
+      }
+      if (buffer.trim()) consume(buffer);
+      if (streamError) throw new Error(streamError);
+      if (!content) throw new Error("服务没有返回内容");
+    }
+    S.history.push({ role: "user", content: q }, { role: "assistant", content });
+  } catch (e) {
+    if (e.name === "AbortError") {
+      content += content ? "\n\n[已停止]" : "已停止";
+      wait.textContent = content;
+    } else {
+      wait.className = "msg err";
+      wait.textContent = e.message || "调用失败";
+    }
+  } finally {
+    S.streaming = false;
+    S.streamController = null;
+    btn.textContent = "发送";
+    wait.classList.remove("streaming");
+    $("#chat").scrollTop = $("#chat").scrollHeight;
   }
 }
 
@@ -595,17 +706,69 @@ function closeGen() {
   if (runTimer) { clearInterval(runTimer); runTimer = null; }
 }
 
+let aiSettingsResolve = null;
+
+function updateAiSettingsNote() {
+  const cloud = $("#aiCloud").checked;
+  const privacy = $("#aiPrivacy").value;
+  let note = "Key 只保存在本机 config.json，不写入浏览器存储。";
+  if (!cloud) note = "当前为本地规则模式：只做配置差异和知识库检索，不发送任何设备配置。";
+  else if (privacy === "strict") note = "严格模式会替换 IP；为避免把映射地址写进设备，自动代做和生成实验会停用。";
+  else if (privacy === "off") note = "原样发送会包含设备当前配置中的真实地址和业务标识，请只在受控环境使用。";
+  $("#aiNote").textContent = note;
+}
+
+function openAiSettings() {
+  $("#aiKey").value = "";
+  $("#aiKey").placeholder = S.ai ? "已配置，留空可保持原 Key" : "sk-…";
+  $("#aiPrivacy").value = S.aiPrivacy || "secrets";
+  $("#aiCloud").checked = S.aiCloud !== false;
+  updateAiSettingsNote();
+  $("#aiModal").classList.remove("hidden");
+  setTimeout(() => $("#aiKey").focus(), 50);
+  return new Promise((resolve) => { aiSettingsResolve = resolve; });
+}
+
+function closeAiSettings(saved) {
+  $("#aiModal").classList.add("hidden");
+  $("#aiKey").value = "";
+  if (aiSettingsResolve) {
+    const resolve = aiSettingsResolve;
+    aiSettingsResolve = null;
+    resolve(!!saved);
+  }
+}
+
 async function setupKey() {
-  const k = window.prompt("把 DeepSeek 的 API Key 粘进来（sk- 开头），只存在这台机器的 config.json 里：");
-  if (!k) return;
-  const r = await api("/api/config", { api_key: k.trim() });
+  return openAiSettings();
+}
+
+async function saveAiSettings() {
+  const key = ($("#aiKey").value || "").trim();
+  const cloud = $("#aiCloud").checked;
+  if (cloud && !key && !S.ai) {
+    return toast("开启云端 AI 前先填写 DeepSeek API Key");
+  }
+  const payload = {
+    privacy: $("#aiPrivacy").value,
+    cloud_enabled: cloud
+  };
+  if (key) payload.api_key = key;
+  const btn = $("#aiSave");
+  btn.disabled = true;
+  const r = await api("/api/config", payload);
+  btn.disabled = false;
   if (!r.ok) return toast(r.error || "保存失败");
-  await refreshLabs();
-  toast("Key 已保存，可以生成实验了");
+  syncAiStatus(r);
+  closeAiSettings(true);
+  toast(cloud ? "助教设置已保存" : "已切换到本地规则模式");
 }
 
 async function doGenerate() {
-  if (!S.ai) { await setupKey(); if (!S.ai) return; }
+  if (!S.ai || !S.aiCloud) {
+    const saved = await setupKey();
+    if (!saved || !S.ai || !S.aiCloud) return;
+  }
   const brief = ($("#genBrief").value || "").trim();
   if (brief.length < 4) return toast("再多说两句，说清要练什么");
   $("#genForm").classList.add("hidden");
@@ -684,6 +847,11 @@ async function doAutoplay() {
   $("#runLog").innerHTML = "";
   $("#runStage").textContent = "正在生成拓扑并打开 eNSP…";
   $("#runCount").textContent = "";
+  $("#runGo").onclick = async () => {
+    closeGen();
+    await refreshLabs();
+    if (pendingLabId) selectLab(pendingLabId);
+  };
   await api(`/api/lab/${pendingLabId}/autoplay`, {});
   pollRun();
   if (runTimer) clearInterval(runTimer);
@@ -1013,7 +1181,12 @@ on("#examClose", () => $("#examModal").classList.add("hidden"));
 on("#examSave", saveExam);
 on("#gradeClose", () => $("#gradeModal").classList.add("hidden"));
 on("#btnGen", openGen);
-on("#aiHead", () => { if (!S.ai) setupKey(); });
+on("#aiHead", () => openAiSettings());
+on("#aiClose", () => closeAiSettings(false));
+on("#aiCancel", () => closeAiSettings(false));
+on("#aiSave", saveAiSettings);
+$("#aiPrivacy").onchange = updateAiSettingsNote;
+$("#aiCloud").onchange = updateAiSettingsNote;
 on("#genClose", closeGen);
 on("#genGo", doGenerate);
 onKey("#genBrief", (e) => {
@@ -1153,7 +1326,10 @@ on("#btnDiag", doDiagnose);
 on("#btnDiff", doDiff);
 on("#btnAnswer", doAnswer);
 on("#btnApply", doApply);
-on("#btnSend", () => send());
+on("#btnSend", () => {
+  if (S.streaming) stopStream();
+  else send();
+});
 onKey("#input", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });

@@ -86,6 +86,90 @@
       "quit"
     ]
   },
+  "variants": [
+    {
+      "id": "wrong-next-hop",
+      "title": "静态路由下一跳错误",
+      "symptom": "PC1 能 ping 通本地网关 192.168.10.1，但 ping 不通 PC2 的 IP 192.168.20.10。",
+      "intro": "这套网络原本配置了静态路由，PC1 和 PC2 之间可以正常通信。现在 PC1 无法访问 PC2 所在网段，需要你排查并修复。",
+      "inject": {
+        "R1": [
+          "system-view",
+          "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+          "ip route-static 192.168.20.0 255.255.255.0 10.0.0.3",
+          "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-route-nh",
+          "title": "定位并修复",
+          "brief": "先看现象、缩小范围、查配置和协议状态，把故障点找出来改回去。",
+          "why": "排错不是猜，是按层次缩小范围。",
+          "hints": [
+            "先在 PC1 上 ping 网关和 PC2，确认故障范围；然后在 R1 上查看路由表，确认去往 PC2 网段的路由是否存在。",
+            "在 R1 上执行 display ip routing-table 查看 192.168.20.0/24 的下一跳；再执行 display current-configuration | include ip route-static 查看静态路由配置。",
+            "在 R1 上删除错误的静态路由，重新配置正确的下一跳：undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.3 然后 ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+          ],
+          "check": [
+            {"dev": "R1", "cmd": "display ip routing-table 192.168.20.0", "expect": "10.0.0.2"},
+            {"dev": "R1", "cmd": "ping -c 3 192.168.20.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "keep": [
+            {"dev": "R1", "cmd": "ping -c 3 192.168.10.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "apply": {
+            "R1": [
+              "system-view",
+              "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.3",
+              "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+              "quit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-route",
+      "title": "静态路由缺失",
+      "symptom": "PC1 能 ping 通网关 192.168.10.1，但访问 PC2 的 192.168.20.10 时全部丢包。",
+      "intro": "两台路由器之间的接口和地址都正常，但 PC1 无法访问 PC2 网段。请判断问题是转发路径、路由表还是接口状态。",
+      "inject": {
+        "R1": [
+          "system-view",
+          "undo ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+          "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-route-missing",
+          "title": "定位并修复",
+          "brief": "先确认 PC1 的网关与 R1 接口状态，再检查 R1 去往 PC2 网段的路由。",
+          "why": "路由缺失和下一跳错误都会表现为跨网段不通，需要用路由表区分。",
+          "hints": [
+            "从 PC1 依次 ping 网关和 PC2，确认故障发生在本地网段还是转发路径。",
+            "在 R1 上执行 display ip routing-table 192.168.20.0 和 display current-configuration | include ip route-static。",
+            "在 R1 系统视图补回静态路由：ip route-static 192.168.20.0 255.255.255.0 10.0.0.2"
+          ],
+          "check": [
+            {"dev": "R1", "cmd": "display ip routing-table 192.168.20.0", "expect": "10.0.0.2"},
+            {"dev": "R1", "cmd": "ping -c 3 192.168.20.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "keep": [
+            {"dev": "R1", "cmd": "ping -c 3 192.168.10.10", "expect": "0.00% packet loss", "timeout": 40}
+          ],
+          "apply": {
+            "R1": [
+              "system-view",
+              "ip route-static 192.168.20.0 255.255.255.0 10.0.0.2",
+              "quit"
+            ]
+          }
+        }
+      ]
+    }
+  ],
   "steps": [
     {
       "id": "s1",

@@ -251,6 +251,10 @@ def finalize(lab):
 def generate(brief):
     if not ai.ready():
         return {"ok": False, "error": "还没配 DeepSeek 的 API Key，配好再试。"}
+    if not ai.cloud_allowed():
+        return {"ok": False, "error": "当前是本地规则模式，生成实验需要先在助教设置中开启云端 AI。"}
+    if ai.load_config().get("privacy") == "strict":
+        return {"ok": False, "error": "严格脱敏会替换生成实验中的 IP 地址，请切换到标准脱敏后再生成。"}
     msgs = [{"role": "user", "content": build_prompt(brief)}]
     errors = []
     for _ in range(3):

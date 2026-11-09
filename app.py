@@ -1,6 +1,8 @@
 import json
 import os
+import random
 import re
+import secrets
 import socket
 import sys
 import threading
@@ -16,6 +18,12 @@ import ai
 import ailab
 import doctor as doctor_mod
 from ensp_kit import Vrp, build_topo
+from learning import build_review_plan
+from vrp_config import build_expected, compare_config, parse_config
+from vrp_security import clean_command, clean_plan, resource_path, safe_id
+
+SESSION_TOKEN = secrets.token_urlsafe(32)
+JSON_LOCK = threading.RLock()
 
 LABS_DIR = os.path.join(BASE, "labs")
 KB_DIR = os.path.join(BASE, "kb")
@@ -47,10 +55,15 @@ def list_labs():
         files.sort(key=lambda f: -os.path.getmtime(os.path.join(folder, f)) if source == "ai" else f)
         for fn in files:
             try:
-                lab = json.load(open(os.path.join(folder, fn), encoding="utf-8"))
+                with open(os.path.join(folder, fn), encoding="utf-8") as f:
+                    lab = json.load(f)
             except Exception:
                 continue
             if "id" not in lab or "steps" not in lab:
+                continue
+            try:
+                safe_id(lab["id"])
+            except (ValueError, TypeError):
                 continue
             out.append({
                 "id": lab["id"],
@@ -63,20 +76,56 @@ def list_labs():
                 "source": lab.get("source", source),
                 "verified": bool(lab.get("verified", {}).get("ok")),
                 "syllabus": lab.get("syllabus", []),
+                "mode": lab.get("mode", ""),
+                "variantTitle": lab.get("variant_title", ""),
             })
     return out
 
 
+def _apply_variant(lab, variant):
+    if not isinstance(variant, dict):
+        return lab
+    out = dict(lab)
+    for key in ("symptom", "intro", "inject", "base", "steps"):
+        if key in variant:
+            out[key] = variant[key]
+    out["variant_id"] = variant.get("id", "")
+    out["variant_title"] = variant.get("title", "")
+    return out
+
+
 def get_lab(lab_id):
-    for folder in (LABS_DIR, GEN_DIR):
-        p = os.path.join(folder, lab_id + ".json")
-        if os.path.exists(p):
-            return json.load(open(p, encoding="utf-8"))
+    try:
+        paths = [resource_path(folder, lab_id) for folder in (LABS_DIR, GEN_DIR)]
+    except (ValueError, TypeError):
+        return None
+    for p in paths:
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                lab = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        try:
+            if lab.get("id") != lab_id:
+                return None
+            safe_id(lab["id"])
+        except (ValueError, KeyError, TypeError):
+            return None
+        variants = lab.get("variants")
+        if isinstance(variants, list) and variants:
+            state = read_json(state_path(lab["id"]), {})
+            current = state.get("variant") if isinstance(state, dict) else None
+            chosen = next((v for v in variants
+                           if isinstance(v, dict) and v.get("id") == current), None)
+            lab = _apply_variant(lab, chosen or variants[0])
+        return lab
     return None
 
 
 def public_lab(lab):
-    d = {k: v for k, v in lab.items() if k not in ("base", "inject")}
+    d = {k: v for k, v in lab.items() if k not in ("base", "inject", "variants")}
     d["steps"] = [
         {k: v for k, v in s.items() if k not in ("apply", "hints", "check", "keep")}
         | {"checks": len(s.get("check", [])) + len(s.get("keep", []) or []),
@@ -87,7 +136,7 @@ def public_lab(lab):
 
 
 def state_path(lab_id):
-    return os.path.join(WORK_DIR, lab_id + ".state.json")
+    return resource_path(WORK_DIR, lab_id, ".state.json")
 
 
 def read_state(lab_id):
@@ -107,7 +156,7 @@ def read_state(lab_id):
 
 
 def progress_path(lab_id):
-    return os.path.join(WORK_DIR, lab_id + ".progress.json")
+    return resource_path(WORK_DIR, lab_id, ".progress.json")
 
 
 GRADES = os.path.join(WORK_DIR, "grades.json")
@@ -196,16 +245,32 @@ def read_json(p, default):
     if not os.path.exists(p):
         return default
     try:
-        return json.load(open(p, encoding="utf-8"))
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return default
 
 
 def write_json(p, obj):
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
+    tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with JSON_LOCK:
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(obj, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, p)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+
+def audit_commands(lab_id, device, commands, source, ok=True):
+    path = os.path.join(WORK_DIR, "audit.jsonl")
+    row = {"ts": time.time(), "lab": lab_id, "device": device,
+           "source": source, "ok": bool(ok), "commands": list(commands)}
+    line = json.dumps(row, ensure_ascii=False) + "\n"
+    with JSON_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def _is_ensp_hwnd(hwnd):
@@ -286,12 +351,6 @@ def _kill_ensp():
 
 CMD_BAD = re.compile(r"Error:|Unrecognized command|Incomplete command|Wrong parameter|Too many parameters")
 
-AI_DENY = re.compile(
-    r"^\s*(reboot|reset\s+saved-configuration|reset\s+recycle-bin|factory-configuration\s+reset|"
-    r"startup\s+saved-configuration|delete\b|format\b|restore\b|undo\s+all\b|rollback\b|"
-    r"schedule\s+reboot)", re.I)
-
-
 def _bad_lines(line, out):
     return [f"{line} → {ln.strip()}" for ln in str(out).splitlines() if CMD_BAD.search(ln)]
 
@@ -312,8 +371,11 @@ def inject_lab(lab):
     st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
-    base = lab.get("base") or {}
-    inject = lab.get("inject") or {}
+    try:
+        base = clean_plan(lab.get("base") or {})
+        inject = clean_plan(lab.get("inject") or {})
+    except ValueError as e:
+        return {"ok": False, "error": "实验命令未通过安全检查：" + str(e)}
     if not base and not inject:
         return {"ok": True, "skipped": True}
     if st.get("injected"):
@@ -327,6 +389,7 @@ def inject_lab(lab):
                 continue
             try:
                 bad = _push_cmds(port, cmds)
+                audit_commands(lab["id"], dev, cmds, "base", not bad)
                 rep.append({"dev": dev, "ok": not bad, "phase": "base",
                             "error": "；".join(bad)})
             except Exception as e:
@@ -343,6 +406,7 @@ def inject_lab(lab):
             continue
         try:
             bad = _push_cmds(port, cmds)
+            audit_commands(lab["id"], dev, cmds, "inject", not bad)
             rep.append({"dev": dev, "ok": not bad, "phase": "inject",
                         "error": "；".join(bad)})
         except Exception as e:
@@ -358,11 +422,17 @@ def inject_lab(lab):
 
 
 def build(lab):
+    variants = [v for v in lab.get("variants") or [] if isinstance(v, dict)]
+    if variants:
+        old_state = read_json(state_path(lab["id"]), {})
+        previous = old_state.get("variant") if isinstance(old_state, dict) else None
+        choices = [v for v in variants if v.get("id") != previous] or variants
+        lab = _apply_variant(lab, random.choice(choices))
     # 上一次没退干净的设备还占着 2000+ 的 console 口时，从最大的那个端口后面开始分配，避免端口打架
     busy = [p for p in range(2000, 2101) if probe(p, 0.03)]
     base_port = (max(busy) + 1) if busy else 2000
     xml, devices = build_topo(lab, base_port)
-    path = os.path.join(WORK_DIR, lab["id"] + ".topo")
+    path = resource_path(WORK_DIR, lab["id"], ".topo")
     with open(path, "w", encoding="gb18030", newline="\r\n") as f:
         f.write(xml)
     ports = {d["name"]: d["com_port"] for d in devices}
@@ -373,6 +443,8 @@ def build(lab):
         "devices": [{"name": d["name"], "model": d["model"], "port": d["com_port"]} for d in devices],
         "ports": ports,
         "busy_ports": busy,
+        "variant": lab.get("variant_id", ""),
+        "variant_title": lab.get("variant_title", ""),
     }
     write_json(state_path(lab["id"]), st)
     opened = False
@@ -402,7 +474,10 @@ def probe(port, timeout=0.5):
 
 
 def status(lab_id):
-    st = read_json(state_path(lab_id), None)
+    try:
+        st = read_json(state_path(lab_id), None)
+    except ValueError:
+        return {"built": False, "devices": []}
     if not st or not isinstance(st.get("devices"), list):
         return {"built": False, "devices": []}
     devs = []
@@ -425,7 +500,7 @@ def console(port, cmds, ready_timeout=25):
 
 
 def hist_path(lab_id):
-    return os.path.join(HIST_DIR, lab_id + ".json")
+    return resource_path(HIST_DIR, lab_id)
 
 
 def record_hist(lab_id, entries):
@@ -444,6 +519,24 @@ def record_hist(lab_id, entries):
         return False
 
 
+def check_retry_policy(check):
+    command = str(check.get("cmd", "")).lower().strip()
+    is_peer = any(token in command for token in ("ospf peer", "bgp peer", "bfd session"))
+    is_reachability = command.startswith(("ping ", "tracert "))
+    default_attempts = 4 if is_peer else 3 if is_reachability else 1
+    try:
+        attempts = int(check.get("attempts", default_attempts))
+    except (TypeError, ValueError):
+        attempts = default_attempts
+    attempts = max(1, min(attempts, 6))
+    try:
+        wait = float(check.get("retry_wait", 5 if is_peer else 3))
+    except (TypeError, ValueError):
+        wait = 3.0
+    wait = max(0.0, min(wait, 15.0))
+    return attempts, wait
+
+
 def run_checks(lab, step, record=True, source="check"):
     st = read_state(lab["id"])
     if not st:
@@ -457,6 +550,12 @@ def run_checks(lab, step, record=True, source="check"):
         port = st["ports"].get(ck["dev"])
         item = {"dev": ck["dev"], "cmd": ck["cmd"], "pass": False, "output": "",
                 "keep": bool(ck.get("keep"))}
+        try:
+            cmd = clean_command(ck["cmd"], read_only=True)
+        except ValueError as e:
+            item["message"] = "检查命令未通过安全检查：" + str(e)
+            results.append(item)
+            continue
         if not port:
             item["message"] = f"{ck['dev']} 没有命令行口，只能在 eNSP 界面里操作"
             results.append(item)
@@ -465,22 +564,32 @@ def run_checks(lab, step, record=True, source="check"):
             item["message"] = f"{ck['dev']} 还没启动或 console 没起来"
             results.append(item)
             continue
-        try:
-            _, out = console(port, [ck["cmd"]], ck.get("timeout", 25))[0]
-        except Exception as e:
-            item["message"] = f"连接 {ck['dev']} 失败：{e}"
-            results.append(item)
-            continue
-        item["output"] = out.strip()
-        if "expect_any" in ck:
-            item["pass"] = any(x in out for x in ck["expect_any"])
-            item["message"] = "期望出现其中之一：" + " / ".join(ck["expect_any"])
-        else:
-            exp = ck["expect"] if isinstance(ck["expect"], list) else [ck["expect"]]
-            missing = [x for x in exp if x not in out]
-            item["pass"] = not missing
-            item["message"] = "期望包含：" + " / ".join(exp) if missing else ""
-        results.append(item)
+        attempts, retry_wait = check_retry_policy(ck)
+        for attempt in range(1, attempts + 1):
+            try:
+                _, out = console(port, [cmd], ck.get("timeout", 25))[0]
+            except Exception as e:
+                item["message"] = f"连接 {ck['dev']} 失败：{e}"
+                if attempt < attempts:
+                    time.sleep(retry_wait)
+                    continue
+                item["attempts"] = attempt
+                results.append(item)
+                break
+            item["output"] = out.strip()
+            if "expect_any" in ck:
+                item["pass"] = any(x in out for x in ck["expect_any"])
+                item["message"] = "期望出现其中之一：" + " / ".join(ck["expect_any"])
+            else:
+                exp = ck["expect"] if isinstance(ck["expect"], list) else [ck["expect"]]
+                missing = [x for x in exp if x not in out]
+                item["pass"] = not missing
+                item["message"] = "期望包含：" + " / ".join(exp) if missing else ""
+            if item["pass"] or attempt >= attempts:
+                item["attempts"] = attempt
+                results.append(item)
+                break
+            time.sleep(retry_wait)
     ok = all(r["pass"] for r in results)
     for r in results:
         if r.get("keep") and not r["pass"]:
@@ -509,7 +618,10 @@ def apply_step(lab, step):
     st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "环境还没搭"}
-    plan = step.get("apply", {})
+    try:
+        plan = clean_plan(step.get("apply") or {})
+    except ValueError as e:
+        return {"ok": False, "error": "配置未通过安全检查：" + str(e), "report": []}
     report = []
     for dev, cmds in plan.items():
         port = st["ports"].get(dev)
@@ -523,8 +635,9 @@ def apply_step(lab, step):
             c.cmd("screen-length 0 temporary", 6)
             bad = []
             for line in cmds:
-                bad.extend(_bad_lines(str(line).strip(), c.cmd(str(line).strip(), 30)))
+                bad.extend(_bad_lines(line, c.cmd(line, 30)))
             c.close()
+            audit_commands(lab["id"], dev, cmds, "apply", not bad)
             report.append({"dev": dev, "ok": not bad, "message": "" if not bad else "；".join(bad)})
         except Exception as e:
             report.append({"dev": dev, "ok": False, "message": str(e)})
@@ -538,9 +651,14 @@ def ai_apply(lab, step):
     plan = step.get("apply", {})
     if not plan:
         return {"ok": False, "error": "这一步没有可执行的配置"}
-    if not ai.ready():
+    cfg = ai.load_config()
+    if not ai.ready() or not cfg.get("cloud_enabled", True) or cfg.get("privacy") == "strict":
         r = apply_step(lab, step)
         r["ai"] = False
+        if cfg.get("privacy") == "strict":
+            r["note"] = "严格脱敏模式下不执行模型生成的地址类命令，已按标准配置刷入"
+        elif not cfg.get("cloud_enabled", True):
+            r["note"] = "本地规则模式不调用云端 AI，已按标准配置刷入"
         return r
 
     diff = diff_step(lab, step)
@@ -559,7 +677,7 @@ def ai_apply(lab, step):
 【这一步的标准配置】
 {json.dumps(plan, ensure_ascii=False, indent=1)}
 
-【程序比对出的差异（可信）】
+【程序比对出的差异（辅助参考，以真实配置为准）】
 {json.dumps([{k: v for k, v in r.items() if k in ("dev", "missing", "extra")} for r in diff.get("reports", []) if r.get("ok")], ensure_ascii=False, indent=1)}
 
 【设备当前真实配置】
@@ -592,10 +710,10 @@ def ai_apply(lab, step):
         for dev, cmds in ai_plan.items():
             keep = []
             for c in cmds:
-                if AI_DENY.match(c):
+                try:
+                    keep.append(clean_command(c))
+                except ValueError:
                     blocked.append(f"{dev}: {c}")
-                else:
-                    keep.append(c)
             if keep:
                 safe[dev] = keep
         ai_plan = safe or None
@@ -620,8 +738,9 @@ def ai_apply(lab, step):
             c.cmd("screen-length 0 temporary", 6)
             bad = []
             for line in cmds:
-                bad.extend(_bad_lines(str(line).strip(), c.cmd(str(line).strip(), 30)))
+                bad.extend(_bad_lines(line, c.cmd(line, 30)))
             c.close()
+            audit_commands(lab["id"], dev, cmds, "ai", not bad)
             report.append({"dev": dev, "ok": not bad, "message": "" if not bad else "；".join(bad),
                            "cmds": cmds})
         except Exception as e:
@@ -658,6 +777,7 @@ def autoplay(lab_id):
     lab = get_lab(lab_id)
     try:
         st, opened = build(lab)
+        lab = get_lab(lab_id) or lab
         ports = [d for d in st["devices"] if d["port"]]
         job["stage"] = "wait"
         job["total"] = len(ports)
@@ -1227,7 +1347,7 @@ def build_diag_prompt(lab, step, snap, diff=None):
             if rep.get("extra"):
                 rows.append(f"{rep['dev']} 多出：" + "；".join(rep["extra"][:4]))
         if rows:
-            lines.append("【程序比对出的配置差异（可信，直接参考）】\n" + "\n".join(rows))
+            lines.append("【程序比对出的配置差异（辅助参考，以设备真实状态为准）】\n" + "\n".join(rows))
     lines.append("【他所有设备当前的真实配置】")
     for name, cfg in snap.items():
         lines.append(f"--- {name} ---\n{cfg}")
@@ -1237,8 +1357,12 @@ def build_diag_prompt(lab, step, snap, diff=None):
 
 
 def diagnose(lab, step):
+    cfg = ai.load_config()
+    if not cfg.get("cloud_enabled", True):
+        return {"ok": True, "content": local_diagnosis(lab, step), "read": [],
+                "local": True}
     if not ai.ready():
-        return {"ok": False, "error": "还没配 DeepSeek 的 Key"}
+        return {"ok": False, "error": "还没配 DeepSeek 的 Key；也可以在助教设置中启用本地规则模式"}
     snap = collect_snapshot(lab)
     if not snap:
         return {"ok": False, "error": "设备都还没起来，先把 eNSP 里的设备启动起来"}
@@ -1252,7 +1376,8 @@ def diagnose(lab, step):
                 temperature=0.3, timeout=90)
     if not r.get("ok"):
         return r
-    return {"ok": True, "content": r["content"], "read": list(snap.keys())}
+    return {"ok": True, "content": r["content"], "read": list(snap.keys()),
+            "privacy": cfg.get("privacy", "secrets")}
 
 
 def kb_all():
@@ -1263,7 +1388,8 @@ def kb_all():
         if not fn.endswith(".json"):
             continue
         try:
-            out.append(json.load(open(os.path.join(KB_DIR, fn), encoding="utf-8")))
+            with open(os.path.join(KB_DIR, fn), encoding="utf-8") as f:
+                out.append(json.load(f))
         except Exception:
             continue
     return out
@@ -1302,7 +1428,10 @@ def kb_list(q="", cat=""):
 
 
 def kb_get(kid):
-    return read_json(os.path.join(KB_DIR, kid + ".json"), None)
+    try:
+        return read_json(resource_path(KB_DIR, kid), None)
+    except ValueError:
+        return None
 
 
 def kb_add(title, level="HCIA", cat="交换"):
@@ -1324,90 +1453,14 @@ def kb_add(title, level="HCIA", cat="交换"):
     return {"ok": True, "id": kid, "title": d.get("title")}
 
 
-NOISE = ("#", "!", "return", "quit", "undo shutdown", "screen-length", "user-interface",
-         "authentication-mode", "idle-timeout", "protocol inbound")
-
-
-def _mask_to_prefix(m):
-    try:
-        parts = [int(x) for x in m.split(".")]
-        return sum(bin(p).count("1") for p in parts)
-    except Exception:
-        return None
-
-
-def norm_line(line):
-    s = " ".join(str(line).strip().split())
-    low = s.lower()
-    if low.startswith("ip address ") and " " in s[11:]:
-        parts = s.split()
-        if len(parts) >= 4:
-            p = parts[3]
-            if "." in p:
-                pre = _mask_to_prefix(p)
-                if pre is not None:
-                    parts[3] = str(pre)
-                    s = " ".join(parts)
-    return s
-
-
-def if_key(name):
-    """接口名归一化：去掉空格、统一小写、展开常见缩写，让 Vlanif 10 / Vlanif10、GE0/0/1 / GigabitEthernet0/0/1 能对上。"""
-    s = re.sub(r"\s+", "", str(name)).lower()
-    s = s.replace("gigabitethernet", "ge").replace("ethernet", "eth")
-    return "if:" + s
-
-
-def expected_from_apply(cmds):
-    out = {"system": []}
-    ctx = "system"
-    for raw in cmds:
-        c = str(raw).strip()
-        if not c:
-            continue
-        low = c.lower()
-        if low.startswith("system-view"):
-            ctx = "system"
-            continue
-        if low.startswith("interface "):
-            ctx = if_key(c.split(None, 1)[1].strip())
-            out.setdefault(ctx, [])
-            continue
-        if low in ("quit", "return"):
-            ctx = "system"
-            continue
-        if low.startswith("undo "):
-            continue
-        out.setdefault(ctx, []).append(norm_line(c))
-    return {k: v for k, v in out.items() if v}
-
-
-def parse_device_config(text):
-    out = {"system": []}
-    ctx = "system"
-    for line in str(text).splitlines():
-        s = line.rstrip()
-        st = s.strip()
-        if not st:
-            continue
-        if st == "#":
-            ctx = "system"
-            continue
-        if st.lower().startswith("interface "):
-            ctx = if_key(st.split(None, 1)[1].strip())
-            out.setdefault(ctx, [])
-            continue
-        if any(st.lower().startswith(n) for n in NOISE):
-            continue
-        out.setdefault(ctx, []).append(norm_line(st))
-    return out
-
-
 def diff_step(lab, step):
     st = read_state(lab["id"])
     if not st:
         return {"ok": False, "error": "还没搭环境"}
-    plan = step.get("apply") or {}
+    try:
+        plan = clean_plan(step.get("apply") or {})
+    except ValueError as e:
+        return {"ok": False, "error": "标准配置未通过安全检查：" + str(e)}
     if not plan:
         return {"ok": False, "error": "这一步没有标准配置可比"}
     reports = []
@@ -1421,61 +1474,10 @@ def diff_step(lab, step):
         except Exception as e:
             reports.append({"dev": dev, "ok": False, "error": str(e)})
             continue
-        want = expected_from_apply(cmds)
-        have = parse_device_config(text)
-        have_all = {ln for v in have.values() for ln in v}
-
-        disp = {"system": ""}
-        for c in cmds:
-            cc = str(c).strip()
-            if cc.lower().startswith("interface "):
-                nm = cc.split(None, 1)[1].strip()
-                disp[if_key(nm)] = nm + " → "
-
-        def where_of(ctx):
-            return disp.get(ctx, ctx.replace("if:", "") + " → ")
-
-        def vlan_sets(lines):
-            batch, single = set(), set()
-            for ln in lines:
-                m2 = re.fullmatch(r"vlan batch (.+)", ln)
-                if m2:
-                    batch.update(m2.group(1).split())
-                    continue
-                m2 = re.fullmatch(r"vlan (\d+)", ln)
-                if m2:
-                    single.add(m2.group(1))
-            return batch, single
-
-        have_batch, have_single = vlan_sets(have_all)
-        missing, extra, hit = [], [], 0
-        for ctx, lines in want.items():
-            # 接口级命令只在同一个接口里比对；系统级命令允许在整个配置里找
-            scope = set(have.get(ctx, [])) if ctx.startswith("if:") else have_all
-            for ln in lines:
-                mv = re.fullmatch(r"vlan (\d+)", ln)
-                if mv and mv.group(1) in have_batch:
-                    hit += 1
-                    continue
-                mb = re.fullmatch(r"vlan batch (.+)", ln)
-                if mb and set(mb.group(1).split()) <= (have_batch | have_single):
-                    hit += 1
-                    continue
-                if ln in scope:
-                    hit += 1
-                else:
-                    missing.append(where_of(ctx) + ln)
-        touched = [c for c in want if c.startswith("if:")]
-        for ctx in touched:
-            allow = set(want.get(ctx, []))
-            for ln in have.get(ctx, []):
-                if ln in allow:
-                    continue
-                if any(ln.lower().startswith(n) for n in NOISE):
-                    continue
-                extra.append(where_of(ctx) + ln)
-        reports.append({"dev": dev, "ok": True, "hit": hit, "total": sum(len(v) for v in want.values()),
-                        "missing": missing, "extra": extra})
+        want = build_expected(cmds)
+        have = parse_config(text)
+        result = compare_config(want, have)
+        reports.append({"dev": dev, "ok": True, **result})
     return {"ok": True, "reports": reports}
 
 
@@ -1505,6 +1507,8 @@ def review_data():
     by_cmd = Counter(f"{e.get('dev','')} {e.get('cmd','')}" for e in checks)
     by_cat = Counter((lab_title.get(e.get("lab"), "") or e.get("lab", "")) for e in checks)
     scores = [g.get("score", 0) for g in grades]
+    adaptive = build_review_plan(checks, grades, quiz, lab_title)
+    trouble = [lab["id"] for lab in list_labs() if lab.get("mode") == "troubleshoot"]
     return {
         "ok": True,
         "attempts": len(grades),
@@ -1513,6 +1517,8 @@ def review_data():
         "byCmd": [{"label": k, "n": v} for k, v in by_cmd.most_common(8)],
         "byCat": [{"label": k, "n": v} for k, v in by_cat.most_common(8)],
         "quiz": {"done": len(quiz), "wrong": sum(1 for q in quiz if q.get("out") != "对")},
+        "adaptive": adaptive,
+        "troubleLabs": trouble,
         "recent": checks[:25],
     }
 
@@ -1525,7 +1531,8 @@ def quiz_all():
         if not fn.endswith(".json"):
             continue
         try:
-            out.append(json.load(open(os.path.join(QUIZ_DIR, fn), encoding="utf-8")))
+            with open(os.path.join(QUIZ_DIR, fn), encoding="utf-8") as f:
+                out.append(json.load(f))
         except Exception:
             continue
     return out
@@ -1549,8 +1556,10 @@ def quiz_list(q="", cat="", level=""):
 
 
 def quiz_get(qid):
-    p = os.path.join(QUIZ_DIR, qid + ".json")
-    return read_json(p, None)
+    try:
+        return read_json(resource_path(QUIZ_DIR, qid), None)
+    except ValueError:
+        return None
 
 
 def quiz_answer(qid, choice):
@@ -1603,8 +1612,96 @@ def course_data(track=None):
                        "done": all(l["done"] for l in labs) if labs else False})
     for i, s in enumerate(stages):
         s["unlocked"] = i == 0 or stages[i - 1]["done"]
+    meta_keys = ("certVersion", "examCode", "sourceUrl", "lastVerified",
+                 "validFrom", "retireAt", "contentNote")
+    track_meta = {key: cur.get(key, "") for key in meta_keys if cur.get(key)}
     return {"ok": True, "title": cur.get("title", ""), "stages": stages,
+            "trackMeta": track_meta,
             "tracks": [{"id": x.get("id"), "title": x.get("title")} for x in courses]}
+
+
+def local_diagnosis(lab, step):
+    diff = diff_step(lab, step) if step else {"ok": False}
+    lines = ["本地规则模式：没有把设备配置发送到云端。"]
+    if diff.get("ok"):
+        for report in diff.get("reports", []):
+            if not report.get("ok"):
+                lines.append(f"{report.get('dev')}：{report.get('error', '读不到配置')}")
+                continue
+            missing = report.get("missing") or []
+            extra = report.get("extra") or []
+            lines.append(f"{report.get('dev')} 对上 {report.get('hit', 0)}/{report.get('total', 0)} 条")
+            if missing:
+                lines.append("还缺：" + "；".join(missing[:8]))
+            if extra:
+                lines.append("多出：" + "；".join(extra[:5]))
+    else:
+        lines.append(diff.get("error", "还没有可比较的标准配置"))
+    if step:
+        checks = [c.get("cmd", "") for c in (step.get("check") or [])[:3]]
+        if checks:
+            lines.append("建议先自己执行只读检查：" + "；".join(checks))
+        hint = (step.get("hints") or [""])[0]
+        if hint:
+            lines.append("方向提示：" + str(hint))
+    return "\n".join(lines)
+
+
+def local_chat_answer(lab, step, question):
+    ask_principle = any(word in question for word in ("原理", "为什么", "是什么", "区别"))
+    if lab and step and not ask_principle:
+        return local_diagnosis(lab, step)
+    found = kb_list((question or "").strip()[:40])[:3] if question else []
+    if found:
+        return ("本地规则模式：没有把问题发送到云端。原理库中相关条目：\n" +
+                "\n".join(f"· {item.get('title')}（{item.get('level')}）" for item in found) +
+                "\n可在「原理库」中查看全文。")
+    return "当前是本地规则模式，只做配置差异和知识库检索，不调用云端模型。需要自由问答时请在助教设置中开启云端 AI。"
+
+
+def _chat_messages(data):
+    lab = get_lab(data.get("lab_id", ""))
+    ctx = []
+    step = None
+    if lab:
+        step = next((s for s in lab["steps"] if s["id"] == data.get("step_id")), None)
+        ctx.append(f"实验：{lab['title']}（{lab['subtitle']}）")
+        ctx.append("设备：" + "、".join(f"{d['name']}({d['model']})" for d in lab["devices"]))
+        if step:
+            ctx.append(f"当前步骤 {step['id']}：{step['title']}")
+            ctx.append(f"这一步要做的：{step['brief']}")
+            if step.get("why"):
+                ctx.append("为什么这么做：" + step["why"])
+            if step.get("apply"):
+                ctx.append("这一步的标准配置（做完后应该达成的命令）：\n" +
+                           json.dumps(step["apply"], ensure_ascii=False))
+            h3 = (step.get("hints") or [None, None, None])[2]
+            if h3:
+                ctx.append("第三级提示里的完整命令：\n" + str(h3)[:800])
+        st = read_state(lab["id"])
+        if st and st.get("devices"):
+            snap = []
+            for d in st["devices"]:
+                if not d.get("port") or not probe(d["port"], 0.3):
+                    continue
+                try:
+                    _, text = console(d["port"], ["display current-configuration"], 15)[0]
+                    snap.append(f"--- {d['name']} 当前配置 ---\n" + text[:2200])
+                except Exception:
+                    pass
+            if snap:
+                ctx.append("他设备的当前真实配置：\n" + "\n".join(snap))
+    if data.get("last_output"):
+        ctx.append("他刚才跑检查命令拿到的回显：\n" + str(data["last_output"])[:1500])
+    msgs = [{"role": "user", "content": "【当前进度】\n" + "\n".join(ctx)}]
+    history = data.get("history")
+    history = history[-6:] if isinstance(history, list) else []
+    for h in history:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
+            msgs.append({"role": h["role"], "content": str(h["content"])[:2000]})
+    q = str(data.get("question") or "").strip()
+    msgs.append({"role": "user", "content": q or "我卡在这一步了，帮我看看从哪下手。"})
+    return msgs, lab, step, q
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1618,20 +1715,66 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(b)
 
+    def _host_allowed(self):
+        host = self.headers.get("Host") or ""
+        try:
+            u = urlparse("//" + host)
+            port = u.port
+        except ValueError:
+            return False
+        if (u.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        return port == self.server.server_port
+
+    def _origin_allowed(self):
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            u = urlparse(origin)
+        except ValueError:
+            return False
+        return ((u.scheme or "http") == "http" and
+                (u.hostname or "").lower() in ("127.0.0.1", "localhost", "::1") and
+                u.port == self.server.server_port)
+
+    def _authorized(self):
+        if not self._host_allowed() or not self._origin_allowed():
+            return False
+        token = self.headers.get("X-Ensp-Token") or ""
+        return secrets.compare_digest(token, SESSION_TOKEN)
+
     def body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Content-Length 无效")
+        if n < 0 or n > 1024 * 1024:
+            raise ValueError("请求体过大")
         if not n:
             return {}
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            raise ValueError("请求体必须是 application/json")
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
-        except Exception:
-            return {}
+            data = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise ValueError("JSON 请求体格式错误")
+        if not isinstance(data, dict):
+            raise ValueError("JSON 请求体必须是对象")
+        return data
 
     def do_GET(self):
+        if not self._host_allowed():
+            return self.send_json({"ok": False, "error": "请在 127.0.0.1 或 localhost 打开"}, 403)
         path = urlparse(self.path).path
+        if path == "/api/session":
+            return self.send_json({"ok": True, "token": SESSION_TOKEN})
         m = re.fullmatch(r"/api/lab/([^/]+)", path)
         if m:
             lab = get_lab(m.group(1))
@@ -1644,8 +1787,11 @@ class Handler(BaseHTTPRequestHandler):
                 prog["done"] = []
             return self.send_json({"ok": True, "lab": public_lab(lab), "progress": prog})
         if path == "/api/labs":
+            status = ai.status()
             return self.send_json({"ok": True, "labs": list_labs(),
-                                   "ai": ai.ready(),
+                                   "ai": status["configured"],
+                                   "aiCloud": status["cloud"],
+                                   "aiPrivacy": status["privacy"],
                                    "calibrated": bool(_load_cfg().get("start_offset"))})
         if path == "/api/exam":
             return self.send_json(exam_view())
@@ -1716,22 +1862,42 @@ class Handler(BaseHTTPRequestHandler):
         return self.static(path)
 
     def do_POST(self):
+        if not self._authorized():
+            return self.send_json({"ok": False, "error": "本地会话校验失败，请刷新页面后重试"}, 403)
         path = urlparse(self.path).path
-        data = self.body()
+        try:
+            data = self.body()
+        except ValueError as e:
+            return self.send_json({"ok": False, "error": str(e)}, 400)
         parts = path.strip("/").split("/")
 
         if path == "/api/chat":
             return self.handle_chat(data)
+        if path == "/api/chat/stream":
+            return self.handle_chat_stream(data)
 
         if path == "/api/config":
-            key = str(data.get("api_key") or "").strip()
-            if not key:
-                return self.send_json({"ok": False, "error": "Key 是空的"})
             cfg_path = os.path.join(BASE, "config.json")
             cfg = read_json(cfg_path, {})
-            cfg["api_key"] = key
+            if "api_key" in data:
+                key = str(data.get("api_key") or "").strip()
+                if len(key) > 300:
+                    return self.send_json({"ok": False, "error": "API Key 过长"}, 400)
+                if key:
+                    cfg["api_key"] = key
+            if "privacy" in data:
+                privacy = str(data.get("privacy") or "")
+                if privacy not in ("off", "secrets", "strict"):
+                    return self.send_json({"ok": False, "error": "隐私级别无效"}, 400)
+                cfg["privacy"] = privacy
+            if "cloud_enabled" in data:
+                if not isinstance(data.get("cloud_enabled"), bool):
+                    return self.send_json({"ok": False, "error": "cloud_enabled 必须是布尔值"}, 400)
+                cfg["cloud_enabled"] = data["cloud_enabled"]
             write_json(cfg_path, cfg)
-            return self.send_json({"ok": True, "ai": ai.ready()})
+            status = ai.status()
+            return self.send_json({"ok": True, "ai": status["configured"],
+                                   "aiCloud": status["cloud"], "aiPrivacy": status["privacy"]})
 
         if path == "/api/doctor":
             items = doctor_mod.check_all()
@@ -1762,9 +1928,13 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.fullmatch(r"/api/lab/([^/]+)/reset-spent", path)
         if m:
-            p2 = read_json(progress_path(m.group(1)), {"done": [], "spent": {}})
+            try:
+                progress = progress_path(m.group(1))
+            except ValueError:
+                return self.send_json({"ok": False, "error": "实验 ID 无效"}, 400)
+            p2 = read_json(progress, {"done": [], "spent": {}})
             p2["spent"] = {}
-            write_json(progress_path(m.group(1)), p2)
+            write_json(progress, p2)
             return self.send_json({"ok": True})
 
         if path == "/api/exam":
@@ -1790,7 +1960,9 @@ class Handler(BaseHTTPRequestHandler):
             action = parts[3] if len(parts) > 3 else ""
             if action == "build":
                 st, opened = build(lab)
-                return self.send_json({"ok": True, "opened": opened, **st})
+                active = get_lab(lab["id"]) or lab
+                return self.send_json({"ok": True, "opened": opened,
+                                       "lab": public_lab(active), **st})
             if action == "reset":
                 try:
                     os.remove(state_path(lab["id"]))
@@ -1874,45 +2046,44 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"ok": False, "error": "no route"}, 404)
 
     def handle_chat(self, data):
-        lab = get_lab(data.get("lab_id", ""))
-        ctx = []
-        if lab:
-            step = next((s for s in lab["steps"] if s["id"] == data.get("step_id")), None)
-            ctx.append(f"实验：{lab['title']}（{lab['subtitle']}）")
-            ctx.append("设备：" + "、".join(f"{d['name']}({d['model']})" for d in lab["devices"]))
-            if step:
-                ctx.append(f"当前步骤 {step['id']}：{step['title']}")
-                ctx.append(f"这一步要做的：{step['brief']}")
-                if step.get("why"):
-                    ctx.append("为什么这么做：" + step["why"])
-                if step.get("apply"):
-                    ctx.append("这一步的标准配置（做完后应该达成的命令）：\n" +
-                               json.dumps(step["apply"], ensure_ascii=False))
-                h3 = (step.get("hints") or [None, None, None])[2]
-                if h3:
-                    ctx.append("第三级提示里的完整命令：\n" + str(h3)[:800])
-            st = read_state(lab["id"])
-            if st and st.get("devices"):
-                snap = []
-                for d in st["devices"]:
-                    if not d.get("port") or not probe(d["port"], 0.3):
-                        continue
-                    try:
-                        _, text = console(d["port"], ["display current-configuration"], 15)[0]
-                        snap.append(f"--- {d['name']} 当前配置 ---\n" + text[:2200])
-                    except Exception:
-                        pass
-                if snap:
-                    ctx.append("他设备的当前真实配置：\n" + "\n".join(snap))
-        if data.get("last_output"):
-            ctx.append("他刚才跑检查命令拿到的回显：\n" + str(data["last_output"])[:1500])
-        msgs = [{"role": "user", "content": "【当前进度】\n" + "\n".join(ctx)}]
-        for h in (data.get("history") or [])[-6:]:
-            if h.get("role") in ("user", "assistant") and h.get("content"):
-                msgs.append({"role": h["role"], "content": str(h["content"])[:2000]})
-        q = str(data.get("question") or "").strip()
-        msgs.append({"role": "user", "content": q or "我卡在这一步了，帮我看看从哪下手。"})
+        msgs, lab, step, question = _chat_messages(data)
+        if not ai.cloud_allowed():
+            return self.send_json({"ok": True, "local": True,
+                                   "content": local_chat_answer(lab, step, question)})
+        if not ai.ready():
+            return self.send_json({"ok": False,
+                                   "error": "还没配 DeepSeek 的 Key；也可以在助教设置中启用本地规则模式"})
         return self.send_json(ai.chat(msgs, timeout=120))
+
+    def handle_chat_stream(self, data):
+        msgs, lab, step, question = _chat_messages(data)
+        if not ai.cloud_allowed():
+            return self.send_json({"ok": True, "local": True,
+                                   "content": local_chat_answer(lab, step, question)})
+        if not ai.ready():
+            return self.send_json({"ok": False, "error": "还没配 DeepSeek 的 Key"})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for delta in ai.chat_stream(msgs, timeout=120):
+                payload = json.dumps({"text": delta}, ensure_ascii=False)
+                self.wfile.write(f"event: delta\ndata: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            self.wfile.write(b"event: done\ndata: {}\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as e:
+            payload = json.dumps({"error": str(e)}, ensure_ascii=False)
+            try:
+                self.wfile.write(f"event: error\ndata: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def static(self, path):
         if path in ("/", ""):
@@ -1927,8 +2098,13 @@ class Handler(BaseHTTPRequestHandler):
             path = "/course.html"
         if path == "/help":
             path = "/help.html"
-        fp = os.path.normpath(os.path.join(WEB_DIR, path.lstrip("/")))
-        if not fp.startswith(WEB_DIR) or not os.path.exists(fp):
+        web_root = os.path.realpath(WEB_DIR)
+        fp = os.path.realpath(os.path.join(web_root, path.lstrip("/")))
+        try:
+            inside = os.path.commonpath((web_root, fp)) == web_root
+        except ValueError:
+            inside = False
+        if not inside or not os.path.isfile(fp):
             self.send_error(404)
             return
         ext = os.path.splitext(fp)[1]
@@ -1937,6 +2113,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(b)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                         "connect-src 'self'; frame-ancestors 'none'")
         if ext in (".html", ".js", ".css"):
             self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()

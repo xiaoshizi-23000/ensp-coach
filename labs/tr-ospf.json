@@ -65,6 +65,84 @@
       "quit"
     ]
   },
+  "variants": [
+    {
+      "id": "area-mismatch",
+      "title": "OSPF 区域不一致",
+      "symptom": "R1 和 R2 接口地址配置正确、物理链路正常，但 OSPF 邻居一直停留在 Down 状态，学不到对端路由。",
+      "intro": "这套网络原本 OSPF 邻居正常、路由互通，现在邻居起不来了。请定位故障点并恢复。",
+      "inject": {
+        "R2": [
+          "system-view", "ospf 1", "undo area 0", "area 1",
+          "network 10.0.12.0 0.0.0.255", "quit", "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-ospf-area",
+          "title": "定位并修复",
+          "brief": "先看邻居状态，再核对两端 OSPF 区域配置，找出不一致处并改回。",
+          "why": "OSPF 邻居建立要求两端接口处于同一区域，区域 ID 不一致会导致 Hello 报文被丢弃。",
+          "hints": [
+            "先确认邻居状态和 OSPF 是否正常运行，再对比两端区域配置。",
+            "在 R1 和 R2 上分别执行 display ospf peer brief 和 display current-configuration configuration ospf。",
+            "在 R2 上删除错误区域并恢复 area 0：undo area 1，area 0，network 10.0.12.0 0.0.0.255。"
+          ],
+          "check": [
+            {"dev": "R1", "cmd": "display ospf peer brief", "expect": "State: Full"},
+            {"dev": "R2", "cmd": "display current-configuration configuration ospf", "expect": "area 0.0.0.0"}
+          ],
+          "keep": [
+            {"dev": "R1", "cmd": "ping -c 2 10.0.12.2", "expect": "0.00% packet loss"}
+          ],
+          "apply": {
+            "R2": [
+              "system-view", "ospf 1", "undo area 1", "area 0",
+              "network 10.0.12.0 0.0.0.255", "quit", "quit"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "hello-mismatch",
+      "title": "OSPF Hello 定时器不一致",
+      "symptom": "R1 和 R2 接口互通，区域号也相同，但 OSPF 邻居一直无法进入 Full，路由表没有对端网段。",
+      "intro": "物理链路和地址都正常，区域配置也没有明显差异。请继续检查 OSPF 接口参数。",
+      "inject": {
+        "R2": [
+          "system-view", "interface GigabitEthernet0/0/0",
+          "ospf timer hello 30", "quit"
+        ]
+      },
+      "steps": [
+        {
+          "id": "s1-ospf-hello",
+          "title": "定位并修复",
+          "brief": "核对两端 OSPF 接口的 Hello 和 Dead 定时器，把参数恢复到一致。",
+          "why": "Hello 定时器不一致的接口不会建立邻居关系，需要两端参数匹配。",
+          "hints": [
+            "先看 display ospf peer brief 是否停在 Down 或 Init，并确认接口 OSPF 已使能。",
+            "在 R2 上执行 display current-configuration interface GigabitEthernet0/0/0，查看 ospf timer hello。",
+            "在 R2 的 GE0/0/0 接口下执行 undo ospf timer hello，恢复默认 Hello 定时器。"
+          ],
+          "check": [
+            {"dev": "R1", "cmd": "display ospf peer brief", "expect": "State: Full"},
+            {"dev": "R2", "cmd": "display ospf peer brief", "expect": "State: Full"}
+          ],
+          "keep": [
+            {"dev": "R1", "cmd": "ping -c 2 10.0.12.2", "expect": "0.00% packet loss"}
+          ],
+          "apply": {
+            "R2": [
+              "system-view", "interface GigabitEthernet0/0/0",
+              "undo ospf timer hello", "quit"
+            ]
+          }
+        }
+      ]
+    }
+  ],
   "steps": [
     {
       "id": "s1",

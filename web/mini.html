@@ -67,14 +67,14 @@
   </div>
   <div class="tip" id="tip">按 Ctrl+S 保存拓扑，否则重开会复位</div>
 </div>
+<script src="client.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 let S = { labs: [], lab: null, step: null, hintLevel: 0, done: [] };
 
 async function api(p, b) {
-  const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
-  return (await fetch(p, o)).json();
+  return window.enspJSON(p, b);
 }
 
 function theme(t) {

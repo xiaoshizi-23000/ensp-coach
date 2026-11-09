@@ -3,6 +3,11 @@
     {
       "id": "hcia-datacom",
       "title": "HCIA → HCIP Datacom 考证路线",
+      "certVersion": "HCIA-Datacom V2.0 + HCIP-Datacom",
+      "examCode": "H12-811 / HCIP-Datacom 当前科目",
+      "sourceUrl": "https://e.huawei.com/cn/talent/#/cert/product-details?certifiedProductId=1307&authenticationLevel=CTYPE_CARE_HCIA&technicalField=IIC&version=2.0",
+      "lastVerified": "2026-11-09",
+      "contentNote": "实验按知识点组织；章节权重和考试代码可能调整，报考前以华为人才在线当期大纲为准。",
       "stages": [
         {
           "name": "第 1 站 · 打基础",
@@ -118,6 +123,11 @@
     {
       "id": "hcie",
       "title": "HCIE-Datacom 进阶路线",
+      "certVersion": "HCIE-Datacom 当前版本",
+      "examCode": "H12-891（笔试） / H12-892（实验）",
+      "sourceUrl": "https://e.huawei.com/cn/talent/",
+      "lastVerified": "2026-11-09",
+      "contentNote": "HCIE 考纲和实验环境变化较快；本站实验用于基础能力训练，不等同于官方实验考试环境。",
       "stages": [
         {
           "name": "第 1 站 · OSPF 综合",

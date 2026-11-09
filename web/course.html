@@ -17,7 +17,12 @@
   .path{height:calc(100vh - 55px);overflow-y:auto;padding:30px 0 80px}
   .path-inner{max-width:760px;margin:0 auto;padding:0 30px}
   .course-title{font-size:18px;font-weight:600;margin:0 0 4px}
-  .course-sub{color:var(--faint);font-size:12.5px;margin-bottom:24px}
+  .course-sub{color:var(--faint);font-size:12.5px;margin-bottom:12px}
+  .course-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:22px;
+    font-size:11px;color:var(--faint)}
+  .course-meta span,.course-meta a{border:1px solid var(--line);border-radius:12px;padding:2px 8px;
+    color:var(--dim);text-decoration:none}
+  .course-meta a{color:var(--accent)}
   .stage{position:relative;padding:0 0 26px 34px;border-left:2px solid var(--line);margin-left:12px}
   .stage:last-child{border-left-color:transparent;padding-bottom:6px}
   .stage .dot{position:absolute;left:-11px;top:0;width:20px;height:20px;border-radius:50%;
@@ -67,10 +72,12 @@
     <h2 class="course-title" id="ct">加载中…</h2>
     <div id="trackTabs" class="kb-cats" style="margin-bottom:10px"></div>
     <p class="course-sub" id="cs">按考纲把实验排成十站，上一站全部交卷及格才解锁下一站</p>
+    <div class="course-meta" id="courseMeta"></div>
     <div id="stages"></div>
   </div>
 </div>
 
+<script src="client.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
@@ -103,7 +110,20 @@ async function boot() {
     tabs.appendChild(b);
   });
   $("#ct").textContent = r.title;
-  $("#cs").textContent = "按考纲把实验排成十站，上一站全部交卷及格才解锁下一站";
+  const meta = r.trackMeta || {};
+  $("#cs").textContent = meta.contentNote || "按考纲把实验排成十站，上一站全部交卷及格才解锁下一站";
+  const metaBox = $("#courseMeta");
+  metaBox.innerHTML = "";
+  if (meta.certVersion) metaBox.appendChild(el("span", null, meta.certVersion));
+  if (meta.examCode) metaBox.appendChild(el("span", null, meta.examCode));
+  if (meta.lastVerified) metaBox.appendChild(el("span", null, "内容核验 " + meta.lastVerified));
+  if (meta.sourceUrl) {
+    const source = el("a", null, "查看华为官方来源");
+    source.href = meta.sourceUrl;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    metaBox.appendChild(source);
+  }
   const box = $("#stages");
   box.innerHTML = "";
   let nowFound = false;
@@ -156,8 +176,7 @@ async function boot() {
 }
 
 async function api(p, b) {
-  const o = b === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) };
-  return (await fetch(p, o)).json();
+  return window.enspJSON(p, b);
 }
 
 boot();

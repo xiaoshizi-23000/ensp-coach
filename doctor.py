@@ -88,6 +88,26 @@ def check_all():
     items.append({"name": "VirtualBox", "ok": bool(vbox) and ver.startswith("5.2"), "value": note,
                   "fix": "装 VirtualBox 5.2.44，或把 VBoxManage.exe 路径写进 config.json 的 vbox_path"})
 
+    if vbox and ver.startswith("5.2"):
+        drv = _run(["sc.exe", "query", "VBoxDrv"])
+        sup = _run(["sc.exe", "query", "VBoxSup"])
+        has_drv = "RUNNING" in drv
+        has_sup = "RUNNING" in sup
+        driver_ok = has_drv and not has_sup
+        if driver_ok:
+            driver_note = "VBoxDrv 5.2 驱动运行正常"
+        elif has_sup:
+            driver_note = "检测到 VBoxSup 驱动但 VBoxDrv 未运行（VirtualBox 5/7 驱动混装）"
+        else:
+            driver_note = "VBoxDrv 未运行"
+        items.append({
+            "name": "VBox 驱动",
+            "ok": driver_ok,
+            "value": driver_note,
+            "fix": "备份 .topo 后卸载现有的 VirtualBox 5/7 驱动残留，重启，再安装 VirtualBox 5.2.44；"
+                   "不要在现代 VirtualBox 上直接叠加安装旧版",
+        })
+
     hyper = _run(["bcdedit", "/enum", "{current}"])
     on = "hypervisorlaunchtype" in hyper.lower() and "auto" in hyper.lower().split("hypervisorlaunchtype")[-1][:20]
     items.append({"name": "Hyper-V", "ok": not on, "value": "开着" if on else "关着",

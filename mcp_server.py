@@ -115,8 +115,13 @@ def t_exec(args):
     if not port:
         return err(f"{args['device']} 没有 console 口")
     try:
-        _, out = app.console(port, [args["command"]])[0]
-        return ok({"device": args["device"], "command": args["command"], "output": out.strip()})
+        from vrp_security import clean_command
+        command = clean_command(args["command"], read_only=True)
+        _, out = app.console(port, [command])[0]
+        app.audit_commands(args["lab_id"], args["device"], [command], "mcp-readonly")
+        return ok({"device": args["device"], "command": command, "output": out.strip()})
+    except ValueError as e:
+        return err(f"命令未通过只读安全检查：{e}")
     except Exception as e:
         return err(f"连不上 {args['device']}：{e}")
 

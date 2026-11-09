@@ -103,13 +103,14 @@
   </main>
 
   <aside class="ai">
-    <div class="ai-head" id="aiHead" title="未配置时点这里填 Key">
+    <div class="ai-head" id="aiHead" title="设置 Key、隐私和云端 AI 开关">
       <span class="dot" id="aiDot"></span>
       <div>
         <b>实验助教</b>
         <span id="aiState">DeepSeek</span>
       </div>
     </div>
+    <div id="privacyLine" class="privacy-line">标准脱敏 · 点上方可调整发送范围</div>
     <div id="chat" class="chat">
       <div class="msg bot">卡住了就直接问。我会看着你当前的步骤和刚才的命令回显回答，不会一上来就把整段配置倒给你。</div>
     </div>
@@ -125,6 +126,38 @@
   </aside>
 </div>
 <div id="toast" class="toast"></div>
+
+<div id="aiModal" class="modal hidden">
+  <div class="modal-box narrow">
+    <div class="modal-head">
+      <div>
+        <h3>实验助教设置</h3>
+        <p>Key 只存本机；设备配置发往云端前会按这里的级别脱敏</p>
+      </div>
+      <button id="aiClose" class="x">×</button>
+    </div>
+    <div class="ai-settings">
+      <label for="aiKey">DeepSeek API Key</label>
+      <input id="aiKey" type="password" autocomplete="off" spellcheck="false"
+             placeholder="已配置时留空即可保持原 Key">
+      <label for="aiPrivacy">发送隐私级别</label>
+      <select id="aiPrivacy">
+        <option value="secrets">标准：隐藏密码、密钥和 SNMP 团体名</option>
+        <option value="strict">严格：额外替换 IP 地址，禁用自动代做和生成实验</option>
+        <option value="off">原样：不脱敏，仅建议在本机受控环境使用</option>
+      </select>
+      <label class="ai-check">
+        <input id="aiCloud" type="checkbox">
+        <span>允许把当前问题和配置发送到 DeepSeek</span>
+      </label>
+      <p class="ai-note" id="aiNote"></p>
+    </div>
+    <div class="modal-actions">
+      <button id="aiCancel" class="btn ghost">取消</button>
+      <button id="aiSave" class="btn primary">保存设置</button>
+    </div>
+  </div>
+</div>
 
 <div id="genModal" class="modal hidden">
   <div class="modal-box">
@@ -231,6 +264,7 @@
   </div>
 </div>
 
+<script src="client.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

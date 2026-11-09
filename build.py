@@ -10,6 +10,7 @@ NAME = "网络实验陪练"
 OUT = os.path.join(DIST, NAME)
 
 COPY_APP = ["app.py", "ai.py", "ailab.py", "ensp_kit.py", "doctor.py", "mcp_server.py",
+            "vrp_security.py", "vrp_config.py", "learning.py",
             "gen_kb.py", "labs", "kb", "quiz", "web"]
 SKIP_LIB = {"test", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3",
             "distutils", "pydoc_data", "site-packages", "turtledemo"}
@@ -65,8 +66,11 @@ def size_of(p):
 
 def copy_runtime(src, dst):
     os.makedirs(dst, exist_ok=True)
-    for f in ("python.exe", "pythonw.exe", "python313.dll", "vcruntime140.dll",
-              "vcruntime140_1.dll", "python3.dll"):
+    names = ["python.exe", "pythonw.exe", "vcruntime140.dll",
+             "vcruntime140_1.dll", "python3.dll"]
+    names.extend(f for f in os.listdir(src)
+                 if f.lower().startswith("python3") and f.lower().endswith(".dll"))
+    for f in dict.fromkeys(names):
         s = os.path.join(src, f)
         if os.path.exists(s):
             shutil.copy2(s, dst)
@@ -98,7 +102,8 @@ def main():
             shutil.copy2(s, d)
 
     cfg = {"api_key": "", "model": "deepseek-flash", "base_url": "https://api.deepseek.com",
-           "temperature": 0.4, "ensp_path": "", "vbox_path": ""}
+           "temperature": 0.4, "ensp_path": "", "vbox_path": "",
+           "privacy": "secrets", "cloud_enabled": True}
     json.dump(cfg, open(os.path.join(app_dir, "config.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
     os.makedirs(os.path.join(app_dir, "workspace", "hist"), exist_ok=True)
